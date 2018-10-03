@@ -56,7 +56,7 @@ getAuthToken :: SignedJWT -> IO BS.ByteString
 getAuthToken jwt = do
   resp <- post "https://www.googleapis.com/oauth2/v4/token" [ "grant_type" := ("urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text), "assertion" := show jwt ]
   mToken <- pure $ unwrapResult $ fmap fromJSON $ resp ^? responseBody . key "access_token"
-  maybe (throwIO GAuthTokenException) pure $ traceShow mToken mToken
+  maybe (throwIO GAuthTokenException) pure $ mToken
 
 unwrapResult :: Maybe (Result Text) -> Maybe BS.ByteString
 unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
@@ -72,10 +72,39 @@ instance Exception GAuthTokenException
 instance Show GAuthTokenException where
   show GAuthTokenException = "Error fetching google auth token"
 
-getEvents :: IO (Response BSLI.ByteString)
+unwrapEvents :: Maybe (Result [GCalEvent]) -> IO [GCalEvent]
+unwrapEvents (Just (Success events)) = pure events
+unwrapEvents _ = throwIO ResponseErrorGCalEvents
+
+getEvents :: IO [GCalEvent]
 getEvents = do
   loadEnv
   token <- getAuthToken =<< googleJWT
-  getWith (defaults & auth ?~ oauth2Bearer token) url
+  resp <- getWith (defaults & auth ?~ oauth2Bearer token) url
+  let mEvents = fromJSON <$> preview (responseBody . key "items") resp
+  unwrapEvents mEvents
   where url = "https://www.googleapis.com/calendar/v3/calendars/" ++ calId ++ "/events"
         calId = "1j5jbe646s86vm99f15ul91eac@group.calendar.google.com"
+
+
+data ResponseErrorGCalEvents = ResponseErrorGCalEvents
+
+instance Exception ResponseErrorGCalEvents
+
+instance Show ResponseErrorGCalEvents where
+  show ResponseErrorGCalEvents = "Error: No events found in google calendar response body"
+
+data GCalDateTime = GCalDateTime String deriving Show
+
+data GCalEvent = GCalEvent String (Maybe String) GCalDateTime GCalDateTime deriving Show
+
+instance FromJSON GCalDateTime where
+  parseJSON = withObject "GCalDateTime" $ \v -> GCalDateTime <$> v .: "dateTime"
+
+instance FromJSON GCalEvent where
+  parseJSON = withObject "GCalEvent" $ \v ->
+    GCalEvent
+      <$> v .: "summary"
+      <*> v .:? "description"
+      <*> v .: "start"
+      <*> v .: "end"
