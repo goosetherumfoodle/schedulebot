@@ -1,0 +1,32 @@
+# Expected to:
+# - have a key for each day
+# - have an array for each key (day)
+#   - days with no shifts should still have an empty array (example: `friday: []`)
+# - have shifts that are in order and non-overlapping
+# - have shifts with no gaps (this could be added if needed)
+
+# TODO: schedule validator rake task
+
+monday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "21:00", "close"]
+tuesday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "18:00", "close"]
+wednesday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "21:00", "close"]
+thursday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "21:00", "close"]
+friday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "21:00", "close"]
+saturday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "19:00", "close"]
+sunday:
+        - ["10:30", "16:00", "open"]
+        - ["16:00", "19:00", "close"]
+
+timezone: "Eastern Time (US & Canada)"

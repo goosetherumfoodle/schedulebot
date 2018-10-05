@@ -4,3 +4,4 @@
 /*.cabal
 /.env
 *~
+/.dir-locals.el

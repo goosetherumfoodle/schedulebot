@@ -33,6 +33,9 @@ library:
   - lens-tutorial
   - containers
   - load-env
+  - hourglass
+  - vector
+  - parsec
   source-dirs: library
 
 executables:
@@ -69,6 +72,9 @@ tests:
     - scheduler-fp
     - tasty
     - tasty-hspec
+    - aeson
+    - raw-strings-qq
+    - yaml
     ghc-options:
     - -rtsopts
     - -threaded

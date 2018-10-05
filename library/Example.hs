@@ -1,30 +1,39 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Example (main) where
+module Example where
 
 import Debug.Trace
 
-import Data.List ((\\), zip)
-import Data.Text (Text(..), pack, replace, zip, unpack)
-import Data.Text.IO as TXT
+import Text.Read (readMaybe)
+import Data.Hourglass (Hours, Minutes)
+import Data.Text (Text, pack, replace, unpack)
 import Data.Text.Encoding (encodeUtf8)
-import Control.Monad (join)
-import Network.Google.OAuth2.JWT
-import Network.Wreq
-import Control.Lens-- (preview, view)
-import Data.Aeson
-import Data.Aeson.Lens-- (_String, key)
--- import Data.Aeson.Lens (_String)
+import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
+import Control.Lens (Identity, preview, (?~), (&), (^?))
+import Data.Aeson.Types (Parser)
+import Data.Aeson.Lens (key)
 import Control.Exception (throwIO, Exception)
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy.Internal as BSLI
-import Data.Map as Map hiding ((\\))
-import LoadEnv
-import System.Environment
-
-main :: IO ()
-main = return ()
+import Data.ByteString.Char8 (ByteString)
+import Data.Vector ((!), (!?))
+import LoadEnv (loadEnv)
+import System.Environment (getEnv)
+import Text.Parsec (parse, try, count, digit, char, (<|>), ParseError, ParsecT)
+import Network.Wreq (FormParam(..)
+                    , post
+                    , responseBody
+                    , getWith
+                    , oauth2Bearer
+                    , auth
+                    , defaults)
+import Data.Aeson (FromJSON(..)
+                  , Result(..)
+                  , fromJSON
+                  , withObject
+                  , withText
+                  , withArray
+                  , (.:)
+                  , (.:?))
 
 newtype JWTException = JWTException String
 
@@ -45,24 +54,32 @@ getPEM = do
   pure $ pem
   where keyVar = "GOOGLE_ACCT_KEY"
 
-
 googleJWT :: IO SignedJWT
 googleJWT = do
   email <- getAcctEmail
   pem <- fromPEMString =<< getPEM
-  (getSignedJWT email Nothing ["https://www.googleapis.com/auth/calendar"] Nothing pem) >>= either (throwIO . JWTException) pure
+  jwt <- getSignedJWT email Nothing [calAuth] Nothing pem
+  either (throwIO . JWTException) pure jwt
+  where
+    calAuth = "https://www.googleapis.com/auth/calendar"
 
-getAuthToken :: SignedJWT -> IO BS.ByteString
+getAuthToken :: SignedJWT -> IO ByteString
 getAuthToken jwt = do
-  resp <- post "https://www.googleapis.com/oauth2/v4/token" [ "grant_type" := ("urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text), "assertion" := show jwt ]
+  resp <- post "https://www.googleapis.com/oauth2/v4/token"
+    [
+      "grant_type" := grantString
+    , "assertion" := show jwt
+    ]
   mToken <- pure $ unwrapResult $ fmap fromJSON $ resp ^? responseBody . key "access_token"
   maybe (throwIO GAuthTokenException) pure $ mToken
+  where
+    grantString = "urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text
 
-unwrapResult :: Maybe (Result Text) -> Maybe BS.ByteString
+unwrapResult :: Maybe (Result Text) -> Maybe ByteString
 unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
 unwrapResult _ = Nothing
 
-testAuthToken :: IO BS.ByteString
+testAuthToken :: IO ByteString
 testAuthToken = loadEnv >> googleJWT >>= getAuthToken
 
 data GAuthTokenException = GAuthTokenException
@@ -83,8 +100,10 @@ getEvents = do
   resp <- getWith (defaults & auth ?~ oauth2Bearer token) url
   let mEvents = fromJSON <$> preview (responseBody . key "items") resp
   unwrapEvents mEvents
-  where url = "https://www.googleapis.com/calendar/v3/calendars/" ++ calId ++ "/events"
-        calId = "1j5jbe646s86vm99f15ul91eac@group.calendar.google.com"
+  where calId = "1j5jbe646s86vm99f15ul91eac@group.calendar.google.com"
+        url = "https://www.googleapis.com/calendar/v3/calendars/"
+          ++ calId
+          ++ "/events"
 
 
 data ResponseErrorGCalEvents = ResponseErrorGCalEvents
@@ -92,19 +111,84 @@ data ResponseErrorGCalEvents = ResponseErrorGCalEvents
 instance Exception ResponseErrorGCalEvents
 
 instance Show ResponseErrorGCalEvents where
-  show ResponseErrorGCalEvents = "Error: No events found in google calendar response body"
+  show ResponseErrorGCalEvents =
+    "Error: No events found in google calendar response body"
 
-data GCalDateTime = GCalDateTime String deriving Show
+data GCalDateTime = GCalDateTime String deriving (Show, Eq)
 
-data GCalEvent = GCalEvent String (Maybe String) GCalDateTime GCalDateTime deriving Show
+data GCalEvent = GCalEvent
+  { gCalSummary :: String
+  , gCalDesc :: (Maybe String)
+  , gCalStart :: GCalDateTime
+  , gCalEnd :: GCalDateTime
+  } deriving (Show, Eq)
 
 instance FromJSON GCalDateTime where
   parseJSON = withObject "GCalDateTime" $ \v -> GCalDateTime <$> v .: "dateTime"
 
 instance FromJSON GCalEvent where
-  parseJSON = withObject "GCalEvent" $ \v ->
+  parseJSON = withObject "GCalEvent" $ \o ->
     GCalEvent
-      <$> v .: "summary"
-      <*> v .:? "description"
-      <*> v .: "start"
-      <*> v .: "end"
+      <$> o .: "summary"
+      <*> o .:? "description"
+      <*> o .: "start"
+      <*> o .: "end"
+
+data RawShiftTime = RawShiftTime Int Int deriving (Show, Eq)
+
+data ShiftTime = ShiftTime Hours Minutes
+
+data Period a = Period { periodStart :: a
+                       , periodEnd :: a
+                       , periodName :: Maybe String
+                       } deriving (Show, Eq)
+
+data ShiftWeek a = ShiftW { wkMon :: [Period a]
+                          , wkTue :: [Period a]
+                          , wkWed :: [Period a]
+                          , wkThu :: [Period a]
+                          , wkFri :: [Period a]
+                          , wkSat :: [Period a]
+                          , wkSun :: [Period a]
+                          } deriving (Show, Eq)
+
+timeParser :: ParsecT Text u Identity (String, String)
+timeParser = do
+  h <- (try $ count 2 digit) <|> count 1 digit
+  _ <- char ':'
+  m <- count 2 digit
+  pure $ (h, m)
+
+instance FromJSON RawShiftTime where
+  parseJSON = withText "RawShiftTime" $ \str -> do
+    (hrs, mins) <- errHandler $ parse timeParser "timeParser" str
+    RawShiftTime <$> readHours hrs <*> readMinutes mins
+      where errHandler :: Either ParseError (String, String) -> Parser (String, String)
+            errHandler (Right a) = pure a
+            errHandler (Left err) = fail $ "Error parsing hours: " ++ show err
+
+            readHours :: Monad m => String -> m Int
+            readHours hrs | Nothing <- readMaybe hrs  :: Maybe Int  = fail $ "Couldn't parse hours"
+                          | Just hrsParsed <- readMaybe hrs = pure hrsParsed
+
+            readMinutes :: Monad m => String -> m Int
+            readMinutes mins | Nothing <- readMaybe mins :: Maybe Int = fail $ "Couldn't parse minutes"
+                             | Just minsParsed <- readMaybe mins = pure minsParsed
+
+instance FromJSON a => FromJSON (Period a) where
+  parseJSON = withArray "Period" $ \ary ->
+    Period
+    <$> (parseJSON $ ary ! 0)
+    <*> (parseJSON $ ary ! 1)
+    <*> (sequence $ parseJSON <$> ary !? 2)
+
+instance FromJSON a => FromJSON (ShiftWeek a) where
+  parseJSON = withObject "ShiftWeek" $ \o ->
+    ShiftW
+      <$> o .: "monday"
+      <*> o .: "tuesday"
+      <*> o .: "wednesday"
+      <*> o .: "thursday"
+      <*> o .: "friday"
+      <*> o .: "saturday"
+      <*> o .: "sunday"

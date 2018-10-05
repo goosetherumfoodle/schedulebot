@@ -4,4 +4,4 @@
 import qualified Example
 
 main :: IO ()
-main = Example.main
+main = return ()-- Example.main
