@@ -30,7 +30,7 @@ library:
   - lens
   - aeson
   - lens-aeson
-  - lens-tutorial
+#  - lens-tutorial
   - containers
   - load-env
   - hourglass
@@ -75,6 +75,7 @@ tests:
     - aeson
     - raw-strings-qq
     - yaml
+    - hourglass
     ghc-options:
     - -rtsopts
     - -threaded

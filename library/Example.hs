@@ -1,12 +1,30 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Example where
 
-import Debug.Trace
+--import Debug.Trace
 
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.List (groupBy)
 import Text.Read (readMaybe)
-import Data.Hourglass (Hours, Minutes)
+import Data.Hourglass ( DateTime(..)
+                      , WeekDay(..)
+                      , ISO8601_DateAndTime(..)
+                      , Date(..)
+                      , TimeOfDay
+                      , Elapsed
+                      , dateAddPeriod
+                      , timeGetDateTimeOfDay
+                      , getWeekDay
+                      , timeGetDateTimeOfDay
+                      , dtDate
+                      , timeGetElapsed
+                      , timeParse
+                      )
+import qualified Data.Hourglass as HG
 import Data.Text (Text, pack, replace, unpack)
 import Data.Text.Encoding (encodeUtf8)
 import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
@@ -89,11 +107,11 @@ instance Exception GAuthTokenException
 instance Show GAuthTokenException where
   show GAuthTokenException = "Error fetching google auth token"
 
-unwrapEvents :: Maybe (Result [GCalEvent]) -> IO [GCalEvent]
+unwrapEvents :: Maybe (Result [RawGCalEvent]) -> IO [RawGCalEvent]
 unwrapEvents (Just (Success events)) = pure events
 unwrapEvents _ = throwIO ResponseErrorGCalEvents
 
-getEvents :: IO [GCalEvent]
+getEvents :: IO [RawGCalEvent]
 getEvents = do
   loadEnv
   token <- getAuthToken =<< googleJWT
@@ -105,7 +123,6 @@ getEvents = do
           ++ calId
           ++ "/events"
 
-
 data ResponseErrorGCalEvents = ResponseErrorGCalEvents
 
 instance Exception ResponseErrorGCalEvents
@@ -114,19 +131,23 @@ instance Show ResponseErrorGCalEvents where
   show ResponseErrorGCalEvents =
     "Error: No events found in google calendar response body"
 
-data GCalDateTime = GCalDateTime String deriving (Show, Eq)
+type RawGCalEvent = GCalEvent (ISO8601 String)
+type GCalEventE = GCalEvent Elapsed
 
-data GCalEvent = GCalEvent
+newtype ISO8601 a = ISO8601 a deriving (Show, Eq)
+
+-- todo: refactor to use Period
+data GCalEvent a = GCalEvent
   { gCalSummary :: String
   , gCalDesc :: (Maybe String)
-  , gCalStart :: GCalDateTime
-  , gCalEnd :: GCalDateTime
+  , gCalStart :: a
+  , gCalEnd :: a
   } deriving (Show, Eq)
 
-instance FromJSON GCalDateTime where
-  parseJSON = withObject "GCalDateTime" $ \v -> GCalDateTime <$> v .: "dateTime"
+instance FromJSON (ISO8601 String) where
+  parseJSON = withObject "GCalDateTime" $ \v -> ISO8601 <$> v .: "dateTime"
 
-instance FromJSON GCalEvent where
+instance FromJSON (GCalEvent (ISO8601 String)) where
   parseJSON = withObject "GCalEvent" $ \o ->
     GCalEvent
       <$> o .: "summary"
@@ -134,9 +155,33 @@ instance FromJSON GCalEvent where
       <*> o .: "start"
       <*> o .: "end"
 
-data RawShiftTime = RawShiftTime Int Int deriving (Show, Eq)
+validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventE
+validateGCalEvent (GCalEvent smry dsc end st) = GCalEvent <$> pure smry <*> pure dsc <*> (parse8601 end)  <*> (parse8601 st)
 
-data ShiftTime = ShiftTime Hours Minutes
+-- I'm assuming that this correctly handles the timezone
+parse8601 :: ISO8601 String -> Either ISO8601Error Elapsed
+parse8601 (ISO8601 s) = maybe (Left $ ISO8601Error s) Right $ timeGetElapsed <$> timeParse ISO8601_DateAndTime s
+
+data ISO8601Error = ISO8601Error String
+
+instance Exception ISO8601Error
+
+instance Show ISO8601Error where
+  show (ISO8601Error str) = "Error: Couldn't parse ISO8601 date format from: " ++ str
+
+-- todo: update these
+type RawShiftTime = ShiftTime (Int, Int)
+type ShiftTimeOfDay = ShiftTime TimeOfDay
+
+newtype ShiftTime a = ShiftTime { runShiftTime :: a } deriving (Show, Eq)
+
+type ShiftWeekTime = ShiftWeek ShiftTimeOfDay
+type ShiftWeekRaw = ShiftWeek RawShiftTime
+
+-- todo: validate times
+-- validateShiftWeek :: ShiftWeekRaw -> ShiftWeekHM
+-- validateShiftWeek
+
 
 data Period a = Period { periodStart :: a
                        , periodEnd :: a
@@ -152,8 +197,8 @@ data ShiftWeek a = ShiftW { wkMon :: [Period a]
                           , wkSun :: [Period a]
                           } deriving (Show, Eq)
 
-timeParser :: ParsecT Text u Identity (String, String)
-timeParser = do
+clockTimeParser :: ParsecT Text u Identity (String, String)
+clockTimeParser = do
   h <- (try $ count 2 digit) <|> count 1 digit
   _ <- char ':'
   m <- count 2 digit
@@ -161,8 +206,8 @@ timeParser = do
 
 instance FromJSON RawShiftTime where
   parseJSON = withText "RawShiftTime" $ \str -> do
-    (hrs, mins) <- errHandler $ parse timeParser "timeParser" str
-    RawShiftTime <$> readHours hrs <*> readMinutes mins
+    (hrs, mins) <- errHandler $ parse clockTimeParser "timeParser" str
+    ShiftTime <$> ((,) <$> readHours hrs <*> readMinutes mins)
       where errHandler :: Either ParseError (String, String) -> Parser (String, String)
             errHandler (Right a) = pure a
             errHandler (Left err) = fail $ "Error parsing hours: " ++ show err
@@ -192,3 +237,99 @@ instance FromJSON a => FromJSON (ShiftWeek a) where
       <*> o .: "friday"
       <*> o .: "saturday"
       <*> o .: "sunday"
+
+newtype Gaps a = Gaps a deriving (Show, Eq)
+
+getGapsInRange :: ShiftWeekTime -> (Date, Date) -> [GCalEventE] -> Gaps [Period Elapsed]
+getGapsInRange shifts dateRange events =
+  Gaps $ concat $ fmap (uncurry dayGetGaps) shiftsAndEvents
+  where
+    shiftsAndEvents = pairShiftsAndEvents datedShifts datedEvents
+    datedShifts = shiftsInRange dateRange shifts
+    datedEvents = Map.fromList $ groupByDate events
+
+dayGetGaps :: [Period Elapsed] -> [GCalEventE] -> [Period Elapsed]
+dayGetGaps shifts events = foldr (flip alterGaps) shifts events
+
+pairShiftsAndEvents :: [(Date, [Period Elapsed])] -> Map Date [GCalEventE] -> [([Period Elapsed], [GCalEventE])]
+pairShiftsAndEvents [] _ = []
+pairShiftsAndEvents (d:ds) e
+  | Just events <- Map.lookup (fst d) e = (snd d, events) : pairShiftsAndEvents ds e
+  | Nothing     <- Map.lookup (fst d) e = (snd d, []) : pairShiftsAndEvents ds e
+
+shiftsInRange :: (Date, Date) -> ShiftWeekTime -> [(Date, [Period Elapsed])]
+shiftsInRange dateRange shifts = fmap (datesShifts shifts) shiftDates
+  where
+    shiftDates :: [Date]
+    shiftDates = uncurry datesFromTo dateRange
+
+    datesShifts :: ShiftWeekTime -> Date -> (Date, [Period Elapsed])
+    datesShifts s date = (,) date
+      $ periodTimeToElapsed date
+      <$> pickShiftSelector (getWeekDay date) s
+
+datesFromTo :: Date -> Date -> [Date]
+datesFromTo d1 d2 | d1 < d2   = d1 : datesFromTo (nextDate d1) d2
+                  | otherwise = [d2]
+
+nextDate :: Date -> Date
+nextDate = flip dateAddPeriod day
+  where
+    day = HG.Period
+      { HG.periodYears = 0
+      , HG.periodMonths = 0
+      , HG.periodDays = 1
+      }
+
+groupByDate :: [GCalEventE] -> [(Date, [GCalEventE])]
+groupByDate = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
+  where
+    addDate :: [GCalEvent Elapsed] -> (Date, [GCalEvent Elapsed])
+    addDate events = ((eventDate . head $ events), events)
+    eventDate = dtDate . timeGetDateTimeOfDay . gCalStart
+
+periodTimeToElapsed :: Date -> Period ShiftTimeOfDay -> Period Elapsed
+periodTimeToElapsed date a =
+  Period
+  (getElapsed . periodStart $ a)
+  (getElapsed . periodEnd $ a)
+  (periodName a)
+  where
+    getElapsed = timeGetElapsed . getDate . runShiftTime
+    getDate = DateTime date
+
+alterGaps :: [Period Elapsed] -> GCalEventE -> [Period Elapsed]
+alterGaps [] _ = []
+alterGaps gaps@(g:gs) event | PostGap <- gapRel g event = gaps
+                            | PriorGap <- gapRel g event = g : alterGaps gs event
+                            | SubsetGap <- gapRel g event = alterGaps gs event
+                            | StrictSupersetGap <- gapRel g event = splitGap g event ++ alterGaps gs event
+                            | IntersectGap <- gapRel g event = shrinkGap g event : alterGaps gs event
+
+data GapRelationship = PostGap | PriorGap | SubsetGap | StrictSupersetGap | IntersectGap deriving (Show, Eq)
+
+splitGap :: Period Elapsed -> GCalEventE -> [Period Elapsed]
+splitGap g e = [
+    Period (periodStart g) (gCalStart e) Nothing
+  , Period (gCalEnd e) (periodEnd g) Nothing
+  ]
+
+shrinkGap :: Period Elapsed -> GCalEventE -> Period Elapsed
+shrinkGap g e | periodStart g < gCalStart e  = Period (periodStart g) (gCalStart e) Nothing
+              | otherwise                    = Period (gCalEnd e) (periodEnd g) Nothing
+
+gapRel :: Period Elapsed -> GCalEventE -> GapRelationship
+gapRel g e | periodEnd g <= gCalStart e = PriorGap
+           | periodStart g >= gCalEnd e = PostGap
+           | periodStart g >= gCalStart e && periodEnd g <= gCalEnd e = SubsetGap
+           | periodStart g < gCalStart e && periodEnd g > gCalEnd e = StrictSupersetGap
+           | otherwise = IntersectGap
+
+pickShiftSelector :: WeekDay -> (ShiftWeek a -> [Period a])
+pickShiftSelector Monday = wkMon
+pickShiftSelector Tuesday = wkTue
+pickShiftSelector Wednesday = wkWed
+pickShiftSelector Thursday = wkThu
+pickShiftSelector Friday = wkFri
+pickShiftSelector Saturday = wkSat
+pickShiftSelector Sunday = wkSun
