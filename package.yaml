@@ -36,6 +36,10 @@ library:
   - hourglass
   - vector
   - parsec
+  - twilio
+  - yaml
+  - prettyprinter
+  - formatting
   source-dirs: library
 
 executables:
@@ -76,6 +80,7 @@ tests:
     - raw-strings-qq
     - yaml
     - hourglass
+    - text
     ghc-options:
     - -rtsopts
     - -threaded
