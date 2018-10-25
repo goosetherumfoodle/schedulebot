@@ -4,7 +4,7 @@
 name: scheduler-fp
 version: '0.0.0'
 github: "goosetherumfoodle/scheduler-fp"
-license: MIT
+license: AGPL-3
 author: "Jesse Hanley"
 maintainer: "Jesse Hanley"
 # synopsis: A new Haskeleton package.
@@ -23,6 +23,7 @@ ghc-options: -Wall
 library:
   dependencies:
   - base
+  - cookie
   - google-oauth2-jwt
   - wreq
   - text
@@ -32,7 +33,9 @@ library:
   - lens-aeson
 #  - lens-tutorial
   - containers
+  - unordered-containers
   - load-env
+  - http-types
   - hourglass
   - vector
   - parsec
@@ -40,6 +43,14 @@ library:
   - yaml
   - prettyprinter
   - formatting
+  - uri-encode
+  - servant-server
+  - servant-xml
+  - xmlbf
+  - wai-logger
+  - wai
+  - warp
+  - http-api-data
   source-dirs: library
 
 executables:

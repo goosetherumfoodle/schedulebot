@@ -1,29 +1,77 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+{-# OPTIONS_GHC -fwarn-unused-do-bind #-}
+
+
 -- TODO:
--- fix msg formatting
--- cron task
--- emergency msg
--- daily nag msg
--- contacts in db
+-- expose notification tasks
 -- deployment
+-- cron tasks
+-- "commands" (help) command
+-- suspend response should show month
+-- limit max suspension days
+-- check for ruby pairity
+-- improve cmd matching
+-- split <say> nodes into <gather> parent
+-- test parsing contacts.yaml
+-- consider how/when to number gaps (for selection) (or to make more like ruby version)
+-- refactor with lenses
+-- consider rendering shift select list from same data as shifts json (first make a map?)
+-- consider switching to megaparsec
+-- contacts in db
+-- error logging/reporting
+-- push env vars (and other?) into State monad
 
 -- DONE:
+-- tasks leave alone suspended users
+-- fix adding extra contacts on write
+-- "shifts" should look at next 7 days
+-- suspensions
+-- post exlusivly (not if another event exists)
+-- claim gcal shifts
+-- fixz correspondance between shift select map and displayed shifts
+-- implement twilio msg conversation
+-- capture twilio cookies
+-- figure out how the fuck to destroy the cookies
+-- set twilio cookies
+-- api endpoint and msg response
+-- contacts in yaml
+-- emergency msg
+-- daily nag msg
+-- fix msg formatting
 -- extract sensitive info (#'s) into env and commit
 
 module Example where
 
 --import Debug.Trace
 
+import Prelude hiding (until)
+
+import Data.List (foldl', find)
+import qualified Network.URI.Encode as URI
+import Xmlbf (ToXml(..), element', text)
+import Web.Cookie
+import Web.HttpApiData -- (ToHttpApiData(..))
+import qualified Data.HashMap.Strict as HMap
+import Servant.XML
+import Web.Internal.FormUrlEncoded (Form, unForm, FromForm(..))
+import Servant.Server (Server)
+import Network.Wai.Handler.Warp (setLogger, setPort, runSettings, defaultSettings)
+import Network.Wai.Logger (withStdoutLogger)
+import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
+import Time.System (localDateCurrentAt)
 import qualified Data.Map as Map
 import Formatting (format, (%))
-import Formatting.Formatters (left, ords)
-import Data.Text.Prettyprint.Doc (Pretty(..), vsep, (<+>))
+import Formatting.Formatters (left, int)
+import Data.Text.Prettyprint.Doc (defaultLayoutOptions, layoutPretty, Pretty(..), vsep, (<+>))
 import Data.Maybe (catMaybes)
 import Data.Int (Int64)
-import Data.Yaml (decodeFileThrow)
+import Data.Yaml (decodeFileThrow, encodeFile)
 import Control.Monad.IO.Class (liftIO)
 import Twilio (runTwilio')
 import Twilio.Messages (PostMessage(..))
@@ -33,6 +81,7 @@ import Data.List (groupBy)
 import Text.Read (readMaybe)
 import qualified Data.Hourglass as HG
 import Data.Text (Text, toLower, strip, pack, replace, unpack)
+import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
 import Control.Lens (Identity, preview, (?~), (&), (^?), (.~))
@@ -40,11 +89,39 @@ import Data.Aeson.Types (Parser)
 import Data.Aeson.Lens (key)
 import Control.Exception (Exception, throwIO)
 import Data.ByteString.Char8 (ByteString)
+import qualified Data.ByteString.Lazy as BSL
 import Data.Vector ((!), (!?))
 import LoadEnv (loadEnv)
 import System.Environment (getEnv)
-import Text.Parsec (ParseError, ParsecT, parse, try, count, digit, char, (<|>))
+import Servant ( Handler
+               , Header
+               , Headers
+               , Post
+               , FormUrlEncoded
+               , ReqBody
+               , Get
+               , Application
+               , Proxy(..)
+               , JSON
+               , addHeader
+               , serve
+               , (:>)
+               , (:<|>)(..))
+import Text.Parsec (ParseError
+                   , ParsecT
+                   , many1
+                   , anyChar
+                   , manyTill
+                   , parse
+                   , try
+                   , count
+                   , digit
+                   , char
+                   , spaces
+                   , string
+                   , (<|>))
 import Network.Wreq ( FormParam(..)
+                    , postWith
                     , param
                     , post
                     , responseBody
@@ -53,13 +130,19 @@ import Network.Wreq ( FormParam(..)
                     , auth
                     , defaults)
 import Data.Aeson (FromJSON(..)
+                  , ToJSON(..)
                   , Result(..)
                   , fromJSON
                   , withObject
                   , withText
                   , withArray
+                  , object
+                  , pairs
+                  , encode
+                  , decode
                   , (.:)
-                  , (.:?))
+                  , (.:?)
+                  , (.=))
 import Data.Hourglass ( UTC(..)
                       , Timeable
                       , LocalTime
@@ -82,6 +165,12 @@ import Data.Hourglass ( UTC(..)
                       , timeGetDate
                       )
 
+data Contact = Contact { contactName :: Text
+                       , contactNumber :: Text
+                       , contactSuspendUntil :: Maybe InternTime
+                       , contactId :: Int
+                       }
+  deriving (Show, Eq)
 
 newtype JWTException = JWTException String
 
@@ -100,7 +189,8 @@ getPEM = do
   -- getEnv adds an extra escape to the newlines, so we remove those
   let pem = unpack $ replace "\\n" "\n" $ pack rawPem
   pure $ pem
-  where keyVar = "GOOGLE_ACCT_KEY"
+  where
+    keyVar = "GOOGLE_ACCT_KEY"
 
 googleJWT :: IO SignedJWT
 googleJWT = do
@@ -123,6 +213,7 @@ getAuthToken jwt = do
   where
     grantString = "urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text
 
+-- TODO: lenses
 unwrapResult :: Maybe (Result Text) -> Maybe ByteString
 unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
 unwrapResult _ = Nothing
@@ -137,6 +228,7 @@ instance Exception GAuthTokenException
 instance Show GAuthTokenException where
   show GAuthTokenException = "Error fetching google auth token"
 
+-- todo: lenses
 unwrapEvents :: Maybe (Result [Maybe RawGCalEvent]) -> IO [Maybe RawGCalEvent]
 unwrapEvents (Just (Success events)) = pure events
 unwrapEvents _ = throwIO ResponseErrorGCalEvents
@@ -147,12 +239,13 @@ localOffset = TimezoneOffset (-240)
 type StartTime = Start InternTime
 type EndTime = End InternTime
 
-newtype Start a = Start { runStart :: a } deriving (Functor, Show)
-newtype End a = End { runEnd :: a } deriving (Functor, Show)
+newtype Start a = Start { runStart :: a } deriving (Functor, Show, Eq)
+newtype End a = End { runEnd :: a } deriving (Functor, Show, Eq)
 
+-- TODO: deal with paginated results (`nextPageToken`)
 -- if we don't have the "singleEvents" query param set, then we might get
 -- recurring dates before the earliest date we request
-getEvents :: (StartTime, EndTime) -> IO [Maybe RawGCalEvent]
+getEvents :: (StartTime, EndTime) -> IO [RawGCalEvent]
 getEvents ((Start start), (End end)) = do
   let (fmtMin, fmtMax) = (show8601UTC start, show8601UTC end)
   loadEnv
@@ -164,9 +257,21 @@ getEvents ((Start start), (End end)) = do
              & param "singleEvents" .~ ["true"]
              & param "timeMin" .~ [fmtMin]
              & param "timeMax" .~ [fmtMax]
+             & param "maxResults" .~ ["2500"]
   resp <- getWith reqOpts $ url calId
   let mEvents = fromJSON <$> preview (responseBody . key "items") resp
-  unwrapEvents mEvents
+  catMaybes <$> (unwrapEvents mEvents)
+  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
+          <> calID
+          <> "/events"
+
+--postEvent :: GCalEventI -> IO BSLI.ByteString
+postEvent e = do
+  loadEnv
+  calId <- getEnv "GCAL_ID"
+  token <- getAuthToken =<< googleJWT
+  resp <- postWith (defaults & auth ?~ oauth2Bearer token) (url calId) (toJSON e)
+  return resp
   where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
           <> calID
           <> "/events"
@@ -192,7 +297,6 @@ data GCalEvent a = GCalEvent
   , gCalEnd :: a
   } deriving (Show, Eq, Functor)
 
-
 instance FromJSON (ISO8601 Text) where
   parseJSON = withObject "GCalDateTime" $ \v -> ISO8601 <$> v .: "dateTime"
 
@@ -204,13 +308,40 @@ instance FromJSON (GCalEvent (ISO8601 Text)) where
       <*> o .: "start"
       <*> o .: "end"
 
+instance ToJSON GCalEventI where
+  toJSON e = object
+    [
+      "summary" .= gCalSummary e
+    , "description" .= gCalDesc e
+    , "start" .= object ["dateTime" .= (show8601UTC $ gCalStart e)]
+    , "end" .= object ["dateTime" .= (show8601UTC $ gCalEnd e)]
+    ]
+
+instance FromJSON Contact where
+  parseJSON = withObject "Contact" $ \o ->
+    Contact
+    <$> o .: "name"
+    <*> o .: "number"
+    <*> o .: "suspendUntil"
+    <*> o .: "id"
+
+instance ToJSON Contact where
+  toJSON (Contact name number susp cid) = object [
+      "name"   .= name
+    , "number" .= number
+    , "suspendUntil" .= susp
+    , "id" .= cid
+    ]
+
+  toEncoding (Contact name number susp cid) =
+    pairs ("name" .= name <> "number" .= number <> "suspendUntil" .= susp <> "id" .= cid)
+
 validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
 validateGCalEvent (GCalEvent smry dsc end st) =
   GCalEvent <$> pure smry <*> pure dsc <*> (parse8601 end) <*> (parse8601 st)
 
 validateGCalEvent' :: RawGCalEvent -> IO GCalEventI
 validateGCalEvent' = either throwIO pure . validateGCalEvent
-
 
 data ISO8601Error = ISO8601Error String
 
@@ -278,12 +409,36 @@ data ShiftWeek a = ShiftW { wkMon :: [Period a]
                           , wkSun :: [Period a]
                           } deriving (Show, Eq)
 
+--parseSuspendDays :: Text -> Maybe (Days Int)
+suspendDaysParser :: ParsecT Text u Identity (Maybe (Days Int))
+suspendDaysParser = do
+  spaces
+  _ <- string "suspend"
+  spaces
+  d <- (readMaybe :: String -> Maybe Int) <$> many1 digit
+  pure $ Days <$> d
+
+parseSuspendDays :: Text -> Maybe (Days Int)
+parseSuspendDays t = handler $ parse suspendDaysParser "suspendDays" (toLower t)
+  where
+    handler = either (const Nothing) id
+
 clockTimeParser :: ParsecT Text u Identity (String, String)
 clockTimeParser = do
   h <- (try $ count 2 digit) <|> count 1 digit
   _ <- char ':'
   m <- count 2 digit
   pure $ (h, m)
+
+contains :: ParsecT Text () Identity [String] -> Text -> Bool
+contains p input = toBool $ parse p "contains" (toLower input)
+  where
+    toBool = either (const False) (const True)
+
+nameParser :: Text -> ParsecT Text u Identity [String]
+nameParser name = traverse (\part -> manyTill anyChar $ string part) nameParts
+  where
+    nameParts = words . unpack . toLower $ name
 
 instance FromJSON RawShiftTime where
   parseJSON = withText "RawShiftTime" $ \str -> do
@@ -294,12 +449,12 @@ instance FromJSON RawShiftTime where
             errHandler (Left err) = fail $ "Error parsing hours: " <> show err
 
             readHours :: Monad m => String -> m Int64
-            readHours hrs | Nothing <- readMaybe hrs  :: Maybe Int  = fail $ "Couldn't parse hours"
-                          | Just hrsParsed <- readMaybe hrs = pure hrsParsed
+            readHours hrs | Just hrsParsed <- readMaybe hrs = pure hrsParsed
+                          | otherwise = fail $ "Couldn't parse hours"
 
             readMinutes :: Monad m => String -> m Int64
-            readMinutes mins | Nothing <- readMaybe mins :: Maybe Int = fail $ "Couldn't parse minutes"
-                             | Just minsParsed <- readMaybe mins = pure minsParsed
+            readMinutes mins | Just minsParsed <- readMaybe mins = pure minsParsed
+                             | otherwise = fail $ "Couldn't parse minutes"
 
 instance FromJSON a => FromJSON (Period a) where
   parseJSON = withArray "Period" $ \ary ->
@@ -307,6 +462,16 @@ instance FromJSON a => FromJSON (Period a) where
     <$> (parseJSON $ ary ! 0)
     <*> (parseJSON $ ary ! 1)
     <*> (sequence $ parseJSON <$> ary !? 2)
+
+instance ToJSON (Period InternTime) where
+  toJSON p =
+    toJSON [
+      periodStart p
+    , periodEnd p
+    ]
+
+instance ToJSON InternTime where
+  toJSON = toJSON . show8601UTC
 
 instance FromJSON a => FromJSON (ShiftWeek a) where
   parseJSON = withObject "ShiftWeek" $ \o ->
@@ -319,17 +484,28 @@ instance FromJSON a => FromJSON (ShiftWeek a) where
       <*> o .: "saturday"
       <*> o .: "sunday"
 
-newtype Gaps a = Gaps a deriving (Show, Eq, Functor)
+newtype Gaps a = Gaps { runGaps :: a } deriving (Show, Eq, Functor)
+
+minGapDuration :: Minutes
+minGapDuration = 65
+
+getMinGapsInRange :: Minutes -> ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
+getMinGapsInRange minGap shifts range events =
+  filter greaterThanMin <$> getAllGapsInRange shifts range events
+  where
+    greaterThanMin = (>= minGap) . fst . periodDuration
 
 -- TODO: should daterange be a period?
-getGapsInRange :: ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
-getGapsInRange shifts (start, end) events =
+getAllGapsInRange :: ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
+getAllGapsInRange shifts (start, end) events =
   Gaps $ concat $ fmap (uncurry dayGetGaps) shiftsAndEvents
   where
     shiftsAndEvents = pairShiftsAndEvents datedShifts datedEvents
     datedShifts = shiftsInRange (start, end) shifts
     datedEvents = Map.fromList $ groupByDate events
 
+-- TODO: I can re-use this logic to figure out if a new event conflicts with
+-- existing ones (this should be then generalized)
 dayGetGaps :: [Period InternTime] -> [GCalEventI] -> [Period InternTime]
 dayGetGaps shifts events = foldr alterGaps shifts events
 
@@ -375,14 +551,18 @@ datesFromTo (Start d1) (End d2)
   | d1 < d2   = d1 : datesFromTo (Start . nextDate $ d1) (End d2)
   | otherwise = [d2]
 
-nextDate :: Date -> Date
-nextDate = flip dateAddPeriod day
+advanceDate :: Days Int -> Date -> Date
+advanceDate (Days n) =
+  flip dateAddPeriod day
   where
     day = HG.Period
       { HG.periodYears = 0
       , HG.periodMonths = 0
-      , HG.periodDays = 1
+      , HG.periodDays = n
       }
+
+nextDate :: Date -> Date
+nextDate = advanceDate . Days $ 1
 
 groupByDate :: [GCalEventI] -> [(Date, [GCalEventI])]
 groupByDate = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
@@ -448,6 +628,22 @@ pickShiftSelector Friday = wkFri
 pickShiftSelector Saturday = wkSat
 pickShiftSelector Sunday = wkSun
 
+-- ensure we don't message inactive contacts
+newtype Active a = Active { runActive :: a } deriving (Show, Eq)
+
+sendSmsTo :: [Active Contact] -> Text -> IO ()
+sendSmsTo cs msg = do
+  loadEnv
+  from <- pack <$> getEnv "FROM_NUMBER"
+  twilSid <- getEnv "TWILIO_ACCT_SID"
+  twilAuth <- getEnv "TWILIO_AUTH_TOKEN"
+  let activeContacts = runActive <$> cs
+  print =<< traverse (msgEach twilSid twilAuth from . unpack . contactNumber) activeContacts
+  where
+    msgEach sid au from num = runTwilio' (pure sid) (pure au) $ do
+        resp <- TWIL.post $ PostMessage (pack num) from msg
+        pure resp
+
 sendSms :: Text -> IO ()
 sendSms msg = do
   loadEnv
@@ -457,9 +653,92 @@ sendSms msg = do
     resp <- TWIL.post $ PostMessage to from msg
     liftIO $ print resp
 
+loadContacts :: IO [Contact]
+loadContacts = decodeFileThrow "contacts.yml"
+
 -- TODO: Read in TZ
 loadShifts :: IO ShiftWeekTime
 loadShifts = validateShiftWeek <$> decodeFileThrow "schedule.yml"
+
+weekStart :: WeekDay
+weekStart = Wednesday
+
+weekOf :: Date -> (StartDate, EndDate)
+weekOf d
+  | getWeekDay d == weekStart = (Start d, End $ advanceDate (Days 6) d)
+  | otherwise = ((Start $ prevWeekStart d), (End $ advanceDate (Days 6) $ prevWeekStart d ))
+
+prevWeekStart :: Date -> Date
+prevWeekStart d
+  | getWeekDay d == weekStart = d
+  | otherwise = prevWeekStart $ advanceDate (Days (-1)) d
+
+testEmergencySMS :: IO ()
+testEmergencySMS = do
+  today    <- getInternTime' <$> getToday
+  tomorrow <- getTomorrow
+  contacts <- onlyActive today <$> loadContacts
+  let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
+      start = Start $ getInternTime' tomorrow
+      end = End $ getInternTime' tomorrowEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  if not . null. runGaps $ gaps
+    then let msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
+         in
+         sendSmsTo contacts (pack . show $ msg)
+    else print ("no gaps tomorrow" :: Text)
+
+onlyActive :: InternTime -> [Contact] -> [Active Contact]
+onlyActive now =  fmap Active . filter (pastSuspDate . contactSuspendUntil)
+  where
+    pastSuspDate Nothing = True
+    pastSuspDate (Just suspDate) | suspDate <= now = True
+                                 | otherwise = False
+
+-- TODO: extract and test more of this logic
+testNagAlert :: Text -> IO ()
+testNagAlert staffer = do
+  today <- getToday
+  let
+    todayTZ = HG.localTimeGetTimezone today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  if stafferOnCal staffer events
+    then print ("What a responsible bastard!" :: Text)
+    else let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+             gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+         in print $ "couldn't find " <> staffer <> pack " on cal\n" <> gapMsg
+
+stafferOnCal :: Foldable f => Text -> f (GCalEvent a) -> Bool
+stafferOnCal staffer = any (hasName . gCalSummary)
+  where
+    hasName = contains $ nameParser staffer
+
+
+-- TODO: extract and test more of this logic
+-- TODO: don't return gaps from a previous shift today
+testGapsThisWeekAlert :: IO ()
+testGapsThisWeekAlert = do
+  today <- getToday
+  let
+    todayTZ = HG.localTimeGetTimezone today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
 
 testGapAlert :: Int -> Int -> IO ()
 testGapAlert from to = do
@@ -468,14 +747,40 @@ testGapAlert from to = do
       start = Start $ internTimeFromLocalOffset startDate
       end = End $ internTimeFromLocalOffset endDate
   sched <- loadShifts
-  rawEvents <- catMaybes <$> getEvents (start, end)
+  rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getGapsInRange sched (start, end) events
+  let gaps = getAllGapsInRange sched (start, end) events
   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+
+-- TODO: extract and test more of this logic
+testGapsTomorrowAlert :: IO ()
+testGapsTomorrowAlert = do
+  tomorrow <- getTomorrow
+  let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
+      start = Start $ getInternTime' tomorrow
+      end = End $ getInternTime' tomorrowEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+
+-- this should eventually be in a state monad
+getToday :: IO (LocalTime Date)
+getToday = (fmap . fmap . fmap) dtDate localDateCurrentAt utcOffset
+
+-- -- for fun
+-- getTodayStub :: IO (LocalTime Date)
+-- getTodayStub = pure $ HG.localTime localOffset date
+--   where
+--     date = Date { dateDay = 26, dateMonth = October, dateYear = 2018 }
+
+getTomorrow :: IO (LocalTime Date)
+getTomorrow = (fmap . fmap) nextDate $ getToday
 
 eventsInRange :: StartTime -> EndTime -> IO [GCalEventI]
 eventsInRange start end = do
-  rawEvents <- catMaybes <$> getEvents (start, end)
+  rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   pure events
 
@@ -483,7 +788,7 @@ summaryDurationsInRange :: StartTime -> EndTime -> IO [(Text, Hours, Minutes)]
 summaryDurationsInRange s e = eventBySummDuration <$> eventsInRange s e
 
 -- ensure that we convert to correct TZ for display purposes
-newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor)
+newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq)
 
 -- track that number is a date for display
 newtype DisplayDate a = DisplayDate { runDD :: a } deriving (Functor)
@@ -497,27 +802,58 @@ internToDisplay tz = DisplayTZ . HG.localTimeSetTimezone tz . runIntern
 internToLocal :: InternTime -> DisplayTZ (LocalTime HG.Elapsed)
 internToLocal = internToDisplay localOffset
 
-instance Pretty a => Pretty (Gaps a) where
-  pretty (Gaps a) = vsep ["Found gaps: ", pretty a]
+type IxGaps a = Map Int (Period a)
+
+indexGaps :: Gaps [Period a] -> IxGaps a
+indexGaps (Gaps ps) = fst $ foldl' addIx (Map.empty, 1) ps
+  where
+    addIx (m, i) p = (Map.insert i p m, i + 1)
+
+instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle empty
+  pretty im = vsep $ fmap prettyIx $ Map.toList im
+    where
+      prettyIx (i, p) = pretty i <> ":" <+> pretty p
+
+-- TODO: number these responses
+instance (Pretty a, Monoid a, Eq a) => Pretty (Gaps a) where
+  pretty (Gaps a) | a == mempty = "No gaps found this week!"
+                  | otherwise   = vsep ["Found gaps: "
+                                       , pretty a]
+
+
+-- instance ToJSON (Gaps [Period InternTime]) where
+--   toJSON (Gaps a) = toJSON $ fst $ foldl' fn (HMap.empty, 1) a
+--     where
+--       fn :: (Object, Int) -> Period InternTime -> (Object, Int)
+--       fn (hm, i) per = (HMap.insert (pack . show $ i) (toJSON per) hm, i + 1)
+
+-- instance (Functor a, Foldable a, Pretty b) => Pretty (OneIx (a b)) where
+--   pretty (OneIx a) = vsep $ toList $ fmap fn a
+--     where
+--       fn a = "1: " <> pretty a
 
 instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
   pretty (Period s _ (Just name)) = pretty (timeGetDate <$> s) <+> pretty name
-  pretty (Period s e Nothing)     = pretty (timeGetDate <$> s) <+> pretty s <+> "-" <+> pretty e
+  pretty (Period s e Nothing)     = pretty (timeGetDate <$> s) <+> pretty s
+                                    <+> "to" <+> pretty e
 
 instance Pretty (DisplayTZ Date) where
   pretty d = pretty  (getWeekDay <$> d) <+> pretty (DisplayDate . dateDay <$> d)
 
+instance Pretty (DisplayTZ (LocalTime Date)) where
+  pretty = pretty . fmap HG.localTimeUnwrap
+
 instance Pretty (DisplayTZ WeekDay) where
   pretty (DisplayTZ Monday)    = "Mon"
-  pretty (DisplayTZ Tuesday)   = "Tues"
+  pretty (DisplayTZ Tuesday)   = "Tue"
   pretty (DisplayTZ Wednesday) = "Wed"
-  pretty (DisplayTZ Thursday)  = "Thurs"
+  pretty (DisplayTZ Thursday)  = "Thu"
   pretty (DisplayTZ Friday)    = "Fri"
   pretty (DisplayTZ Saturday)  = "Sat"
   pretty (DisplayTZ Sunday)    = "Sun"
 
 instance Pretty (DisplayTZ (DisplayDate Int)) where
-  pretty (DisplayTZ (DisplayDate a)) = pretty $ format ords a
+  pretty (DisplayTZ (DisplayDate a)) = pretty $ format int a
 
 instance Pretty (DisplayTZ (LocalTime HG.Elapsed)) where
   pretty (DisplayTZ e) =
@@ -552,6 +888,10 @@ getInternTime currentTZ =
   . HG.localTimeSetTimezone utcOffset
   . HG.localTime currentTZ
   . HG.timeGetElapsed
+
+getInternTime' :: Timeable t => LocalTime t -> InternTime
+getInternTime' lt =
+  getInternTime (HG.localTimeGetTimezone lt) $ HG.localTimeUnwrap lt
 
 internTimeFromUTC :: Timeable t => t -> InternTime
 internTimeFromUTC = getInternTime utcOffset
@@ -588,6 +928,9 @@ instance Timeable (LocalTime HG.Elapsed) where
 
 instance Timeable InternTime where
   timeGetElapsedP = HG.timeGetElapsedP . runIntern
+
+periodDuration :: PeriodIntern -> (Minutes, HG.Seconds)
+periodDuration a = fromSeconds $ timeDiff (periodEnd a) (periodStart a)
 
 eventDuration :: GCalEventI -> (Minutes, HG.Seconds)
 eventDuration a = fromSeconds $ timeDiff (gCalEnd a) (gCalStart a)
@@ -627,3 +970,348 @@ toHours m s =
     (mins, _) = fromSeconds remSecs :: (Minutes, HG.Seconds)
   in
     (hours, mins)
+
+data TwilioCallResponse = TCallResp Text
+data TwilioMsgResponse = TMsgResp Text
+
+instance ToXml TwilioCallResponse where
+  toXml (TCallResp a) =
+    [
+      element' "Response" HMap.empty
+      [
+        element' "Say" (HMap.fromList [("voice", "woman")]) ([text a])
+      ]
+    ]
+
+instance ToXml TwilioMsgResponse where
+  toXml (TMsgResp a) =
+    [
+      element' "Response" HMap.empty
+      [
+        element' "Message" HMap.empty ([text a])
+      ]
+    ]
+
+data TwilioMsgData = TMsgData {
+    msgBody :: Text
+  , msgFrom :: Text
+  , msgTo :: Text
+  }
+  deriving Show
+
+data TwilioCallData = TCallData {
+    callFrom :: Text
+  , callTo :: Text
+  }
+  deriving Show
+
+instance FromForm TwilioMsgData where
+  fromForm = handleErr . maybeTData
+    where
+      maybeTData :: Form -> Maybe TwilioMsgData
+      maybeTData f = do
+        let m = unForm f
+        body <- HMap.lookup "Body" m
+        from <- HMap.lookup "From" m
+        to   <- HMap.lookup "To"   m
+        pure $ TMsgData (head body) (head from) (head to)
+
+      handleErr = maybe (Left "Failure parsing twilio message form-data") Right
+
+instance FromForm TwilioCallData where
+  fromForm = handleErr . maybeTData
+    where
+      maybeTData :: Form -> Maybe TwilioCallData
+      maybeTData f = do
+        let m = unForm f
+        from <- HMap.lookup "From" m
+        to   <- HMap.lookup "To"   m
+        pure $ TCallData (head from) (head to)
+
+      handleErr = maybe (Left "Failure parsing twilio call form-data") Right
+-- /contacts.json
+-- /sms.xml
+-- /call.xml
+
+type API = "contacts" :> Get '[JSON] [Contact]
+      :<|> "sms" :> Header "Cookie" Cookies :> ReqBody '[FormUrlEncoded] TwilioMsgData :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+      :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData :> Post '[XML] TwilioCallResponse
+
+twimlCall :: Text -> TwilioCallResponse
+twimlCall = TCallResp
+
+twimlMsg :: Text -> TwilioMsgResponse
+twimlMsg = TMsgResp
+
+server :: Server API
+server = liftIO loadContacts
+    :<|> twilMsg
+    :<|> twilCall
+  where
+    twilMsg :: Maybe Cookies -> TwilioMsgData -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+    twilMsg cookies inMsg = do
+      contacts <- liftIO loadContacts
+      let inboundNumber = (msgFrom inMsg)
+          mContact = find ((inboundNumber ==) . contactNumber) contacts
+      liftIO (print cookies)
+      liftIO (print inMsg)
+      case mContact of
+        (Just c) ->
+          performCmd $ getCmd inMsg c $ Map.fromList <$> ((fmap . fmap . fmap) BSL.fromStrict cookies)
+        Nothing -> do
+          liftIO $ print ("Unrecognized number\n" :: Text)
+          performCmd UnrecognizedNumber
+
+    twilCall :: TwilioCallData -> Handler TwilioCallResponse
+    twilCall inMsg = liftIO (print inMsg) >> pure (twimlCall bob)
+
+type CookiesMap = Map ByteString BSL.ByteString
+type ShiftSelectMap = Map Int PeriodIntern
+
+isClaimShift :: TwilioMsgData -> CookiesMap -> Maybe PeriodIntern
+isClaimShift d cm = do
+  json <- Map.lookup availableShiftsCookieName cm
+  shiftmap <- decode . BSL.fromStrict $ URI.decodeByteString . BSL.toStrict $ json :: Maybe ShiftSelectMap
+  selected <- Map.lookup <$> (readMaybe . unpack . msgBody $ d) <*> pure shiftmap
+  selected
+
+instance FromJSON InternTime where
+  parseJSON = withText "InternTime" $ \txt ->
+    either (fail . show) pure $ parse8601 $ ISO8601 txt
+
+data Cmd =
+    Availableshifts
+  | ClaimShift Contact (Period InternTime)
+  | Suspend Contact (Days Int)
+  | UnrecognizedNumber
+  | UnrecognizedCmd TwilioMsgData
+
+getCmd :: TwilioMsgData -> Contact -> Maybe CookiesMap -> Cmd
+
+getCmd d c (Just cm) | (Just period) <- isClaimShift d cm = ClaimShift c period
+                     | otherwise = getCmd d c Nothing
+
+-- TODO: horse: prolly use regex and capture the goddamn "suspend n" number
+
+getCmd d c Nothing | ("shifts":_) <- Text.words . toLower . msgBody $ d = Availableshifts
+                   | Just days <- parseSuspendDays .toLower . msgBody $ d  = Suspend c days
+                   | otherwise = UnrecognizedCmd d
+
+performCmd :: Cmd -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse) --Handler TwilioMsgResponse
+
+performCmd (UnrecognizedCmd d) =
+  pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
+
+performCmd Availableshifts = do
+  gaps <- indexGaps <$> (liftIO $ gapsNowTo $ Days 7)
+  pure
+    $ addAvailableshiftsCookie
+    gaps
+    (twimlMsg . fump . (fmap . fmap) internToLocal $ gaps)
+
+performCmd UnrecognizedNumber = do
+  pure $ destroyCookie $ twimlMsg ""
+
+performCmd (ClaimShift contact period) = do
+  mEvents <- liftIO $ (fmap . fmap) validateGCalEvent $ getEvents ((Start $ periodStart period), (End $ periodEnd period))
+  let available = not <$> (hasOverlap <$> (sequence mEvents) <*> pure (mkGCalEvent period ""))
+  case available of
+    Right True ->
+      liftIO $ print <$> postEvent (mkGCalEvent period (contactName contact))
+      >> (pure $ destroyCookie $ twimlMsg $ "Shift claimed: " <> (fump $ internToLocal <$> period))
+    _ ->
+      pure $ destroyCookie $ twimlMsg $ "That shift is no longer available. Try again. :("
+
+performCmd (Suspend c d) = do
+  today <- liftIO getToday
+  let until = advanceDate d <$> today
+  liftIO $ suspendContact c $ getInternTime' until
+  pure $ destroyCookie $ twimlMsg $ dump $ pretty ("Notificaitons silenced until: " :: Text) <> (pretty . displayTZ localOffset $ until)
+
+suspendContact :: Contact -> InternTime -> IO ()
+suspendContact c t = do
+  oldContacts <- loadContacts
+  let cId = contactId c
+      newContact = c { contactSuspendUntil = Just t }
+      newContacts = newContact : filter ((cId /=) . contactId) oldContacts
+  writeContacts newContacts
+
+writeContacts :: [Contact] -> IO ()
+writeContacts = encodeFile "contacts.yml"
+
+newtype Days a = Days a deriving (Show, Eq)
+
+mkGCalEvent :: PeriodIntern -> Text -> GCalEventI
+mkGCalEvent p summ = GCalEvent summ botText (periodStart p) (periodEnd p)
+  where
+    botText = Just "Event created by shift bot."
+
+hasOverlap :: [GCalEventI] -> GCalEventI -> Bool
+hasOverlap onCal newEvent = ([eventPeriod] /=) $ dayGetGaps [eventPeriod] onCal
+  where
+    eventPeriod :: PeriodIntern
+    eventPeriod = periodize newEvent
+
+periodize :: GCalEventI -> PeriodIntern
+periodize e = Period (gCalStart e) (gCalEnd e) Nothing
+
+-- TODO: rename this shit
+fump :: Pretty a => a -> Text
+fump = dump . pretty
+
+-- TODO: rename
+dump = renderStrict . layoutPretty defaultLayoutOptions
+
+-- TODO: needs instance TOJSON periods a
+addAvailableshiftsCookie :: IxGaps InternTime -> TwilioMsgResponse -> Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse
+addAvailableshiftsCookie m | m == Map.empty = destroyCookie
+addAvailableshiftsCookie gaps = do
+  let cookie = emptyAvailableShiftsCookie {
+        setCookieValue = URI.encodeByteString . BSL.toStrict . encode $ gaps
+        }
+  addHeader cookie
+
+addAvailableshiftsCookie' :: ToJSON (Gaps [a]) => Gaps [a] -> TwilioMsgResponse -> Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse
+addAvailableshiftsCookie' (Gaps []) = destroyCookie
+addAvailableshiftsCookie' gaps = do
+  let cookie = emptyAvailableShiftsCookie {
+        setCookieValue = URI.encodeByteString . BSL.toStrict . encode $ gaps
+        }
+  addHeader cookie
+
+destroyCookie :: TwilioMsgResponse -> Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse
+destroyCookie = addHeader emptyAvailableShiftsCookie { setCookieMaxAge = Just 0  }
+
+emptyAvailableShiftsCookie :: SetCookie
+emptyAvailableShiftsCookie =
+  defaultSetCookie {
+    setCookieName = availableShiftsCookieName
+  , setCookieValue = ""
+  }
+
+availableShiftsCookieName :: ByteString
+availableShiftsCookieName = "available-shifts"
+
+contactsAPI :: Proxy API
+contactsAPI = Proxy
+
+-- 'serve' comes from servant and hands you a WAI Application,
+-- which you can think of as an "abstract" web application,
+-- not yet a webserver.
+app :: Application
+app = serve contactsAPI server
+
+instance FromHttpApiData Cookies where
+   parseHeader = Right . parseCookies
+
+startServer :: IO ()
+startServer = do
+  withStdoutLogger $ \appLogger -> do
+    let settings = setPort 3000 $ setLogger appLogger defaultSettings
+    runSettings settings app
+
+-- -- type ApacheLogger = Request -> Status -> Maybe Integer -> IO ()
+-- Use this to log all request headers
+-- logHeaders logger req s i = print (requestHeaders req) >> logger req s i
+
+thisWeekGaps :: IO (Gaps [Period InternTime])
+thisWeekGaps = do
+  today <- getToday
+  let
+    todayTZ = HG.localTimeGetTimezone today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  pure $ getMinGapsInRange minGapDuration sched (start, end) events
+
+gapsNowTo :: Days Int -> IO (Gaps [Period InternTime])
+gapsNowTo d = do
+  today <- getToday
+  let
+    endDateEOD = (fmap.fmap) (advanceDate d) $ End today
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> endDateEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  pure $ getMinGapsInRange minGapDuration sched (start, end) events
+
+thisWeekGapsText :: IO Text
+thisWeekGapsText = do
+  today <- getToday
+  let
+    todayTZ = HG.localTimeGetTimezone today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+      dGaps = (fmap . fmap . fmap) internToLocal gaps
+--  print . toJSON . indexGaps $ dGaps
+  pure . renderStrict . layoutPretty defaultLayoutOptions . pretty $ indexGaps dGaps
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- TODO: the limit on texts in a <Say> twiml node is 4,096.
+-- this text is currently 4652
+bob :: Text
+bob =  "In astronomy, \"revolution\" refers to a return to the same place. For the left it seems to mean about the same. Leftism is literally reactionary. Just as generals prepare to fight the last war, leftists incite the last revolution. They welcome it because they know it failed. They are vanguardists because they are always behind the times. Like all leaders, leftists are least obnoxious when following their following, but in certain crises they step to the fore to make the system work. If the left/right metaphor has any meaning, it can only be that the left is to the left of the same thing the right is to the right of. But what if revolution means stepping out of line? If there were no right, the left would have to invent it — and it often has. (Examples: Calculated hysteria over Nazis and the K K K which awards these wimpy slugs the notoriety they need; or lowest-common-denunciation of the Moral Majority obviating unmannerly attacks on the real sources of moralist tyranny — the family, religion in general, and the work-ethic espoused by leftists and Christians alike.) The right likewise needs the left: its operational definition is always anti-communism, variously drecked-out. Thus left and right presuppose and re-create each other. One bad thing about bad times is that they make opposition too easy, as (for instance) the current economic crisis gets shoehorned into archaic Marxist, populist or syndicalist categories. The left thereby positions itself to fulfill its historic role as reformer of those incidental (albeit agonizing) evils which, properly attended to, conceal the system's essential inequities: hierarchy, moralism, bureaucracy, wage-labor, monogamy, government, money. (How can Marxism ever be more than capitals most sophisticated way of thinking about itself?) Consider the acknowledged epicenter of the current crisis. work. Unemployment is a bad thing. But it doesn't follow, outside of righto-leftist dogma, that employment is a good thing. It is not. The \"right to work,\" arguably an appropriate slogan in 1848, is obsolete in 1982. People don't need work. What we need is satisfaction of subsistence requirements, on the one hand, and opportunities for creative, convivial, educative, diverse, passionate activity on the other. Twenty years ago the Goodman brothers guessed that 5% of the labor then expended would meet minimum survival needs, a figure which must be lower today; obviously entire so-called industries serve nothing but the predatory purposes of commerce and coercion. That's an ample infrastructure to play with in creating a world of freedom, community and pleasure where \"production\" of use-values is \"consumption\" of free gratifying activity. Transforming work into play is a project for a proletariat that refuses that condition, not for leftists left with nothing to lead. Pragmatism, as is obvious from a glance at its works, is a delusive snare. Utopia is sheer common sense. The choice between \"full employment\" and unemployment — the choice that left and right collaborate to confine us to — is the choice between the Gulag and the gutter. No wonder that after all these years a stifled and suffering populace is weary of the democratic lie. There are less and less people who want to work, even among those who rightly fear unemployment, and more and more people who want to work wonders. By all means let's agitate for handouts, tax cuts, freebies, bread and circuses — why not bite the hand that feeds you? the flavor is excellent — but without illusions. The surrational kernel of truth in the mystical Marxist shell is this: the \"working class\" is the legendary \"revolutionary agent\": but only if, by not working, it abolishes class. Perennial \"organizers,\" leftists don't understand that the workers have already been definitively \"organized\" by, and can only be organized for — their bosses. \"Activism\" is idiocy if it enriches and empowers our enemies. Leftism, that parasite for sore eyes, dreads the outbreak of a Wilhelm Reichstag fire which will consume its parties and unions along with the corporations and armies and churches currently controlled by its ostensible opposite. Nowadays you have to be odd to get even. Greylife leftism, with its checklists of obligatory antagonisms (to this-ism, that-ism and the other-ism: everything but leftism) is devoid of all humor and imagination: hence it can stage only coups, not revolutions, which change lies but not life. But the urge to create is also a destructive urge. One more effort, leftists, if you would be revolutionaries! If you're not revolting against work, you're working against revolt."

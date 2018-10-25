@@ -20,6 +20,19 @@ main = do
 spec :: Spec
 spec = parallel $ do
   describe "parsing" $ do
+    describe "parseSuspendDays" $ do
+      context "with valid input" $ do
+        it "should retrieve days" $ do
+          let text = " susPend \t123 99  "
+
+          parseSuspendDays text `shouldBe` (Just (Days 123))
+
+      context "with invalid input" $ do
+        it "should be nothing" $ do
+          let text = "supnd 123"
+
+          parseSuspendDays text `shouldBe` Nothing
+
     it "GCalEvent" $ do
       let json = "{\"summary\": \"this is the summary\",         \
                  \\"description\": \"good description\",         \
@@ -344,7 +357,7 @@ sunday:
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1, Period gap2Start eventStart Nothing]
 
-  describe "getGapsInRange" $ do
+  describe "getAllGapsInRange" $ do
     context "with a single gap" $ do
       it "finds the gap" $ do
         let shifts = ShiftW
@@ -385,7 +398,7 @@ sunday:
                         , End . internTimeFromLocalOffset . eod $ sunday
                         )
 
-            results = getGapsInRange shifts dateRange events
+            results = getAllGapsInRange shifts dateRange events
 
         results `shouldBe` Gaps [expectedGap]
 
@@ -453,7 +466,7 @@ sunday:
                       , End . internTimeFromLocalOffset . eod $ sunday
                       )
 
-          results = getGapsInRange shifts dateRange (fridayEvents ++ sundayEvents)
+          results = getAllGapsInRange shifts dateRange (fridayEvents ++ sundayEvents)
 
         results `shouldBe` Gaps [expectedGap1, expectedGap2]
 
@@ -494,7 +507,7 @@ sunday:
             , End . internTimeFromLocalOffset $  Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
             )
 
-          results = getGapsInRange shifts dateRange sundayEvents
+          results = getAllGapsInRange shifts dateRange sundayEvents
 
         results `shouldBe` Gaps []
 
@@ -524,7 +537,7 @@ sunday:
               Start . internTimeFromLocalOffset $ Date { dateDay = 01, dateMonth = March, dateYear = 2018 }
             , End . internTimeFromLocalOffset $ Date { dateDay = 10, dateMonth = March, dateYear = 2018 }
                       )
-          results = getGapsInRange shifts dateRange sundayEvents
+          results = getAllGapsInRange shifts dateRange sundayEvents
 
         results `shouldBe` Gaps []
 
@@ -558,9 +571,55 @@ sunday:
 
           dateRange = (start, end)
 
-          results = getGapsInRange  shifts dateRange []
+          results = getAllGapsInRange  shifts dateRange []
 
         results `shouldBe` Gaps [expectedGap]
+
+  describe "getMinGapsInRange" $ do
+    context "with a gap below the miniumum and a gap above" $ do
+      it "finds the gap above the minumum" $ do
+        let
+          shifts = ShiftW
+              {
+                wkMon = []
+              , wkTue = []
+              , wkWed = []
+              , wkThu = []
+              , wkSat = []
+              , wkFri =
+                [
+                  Period {
+                    periodName = Just "small gap"
+                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 11) (Minutes 0) (Seconds 0) (NanoSeconds 0))
+                    }
+                ]
+              , wkSun =
+                [
+                  Period {
+                    periodName = Just "large gap"
+                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    }
+                ]
+              }
+
+          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          friday = Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
+
+          gap2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
+          gap2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+          expectedGap2 = Period gap2Start gap2End $ Just "large gap"
+
+          dateRange = ( Start . internTimeFromLocalOffset $ friday
+                      , End . internTimeFromLocalOffset . eod $ sunday
+                      )
+
+          minMinutes = 60
+
+          results = getMinGapsInRange minMinutes shifts dateRange []
+
+        results `shouldBe` Gaps [expectedGap2]
 
   describe "shiftsInrange" $ do
     it "selects all shifts that start in the range" $ do
@@ -653,7 +712,7 @@ sunday:
         xEvent1 = GCalEvent "x" Nothing xEvent1Start xEvent1End
 
         yEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
-        yEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+        yEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 45 0 0)
         yEvent = GCalEvent "y" Nothing yEventStart yEventEnd
 
         xEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
@@ -661,10 +720,118 @@ sunday:
         xEvent2 = GCalEvent " X  " Nothing xEvent2Start xEvent2End
 
         expected = [ ("x", Hours 5, Minutes 0)
-                   , ("y", Hours 2, Minutes 0)
+                   , ("y", Hours 2, Minutes 15)
                    ]
 
       eventBySummDuration [xEvent1, yEvent, xEvent2] `shouldBe` expected
+
+  describe "weekOf" $ do
+    it "finds the week of the current date" $ do
+      let
+        sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+
+        start = Start $ Date { dateDay = 28, dateMonth = February, dateYear = 2018 }
+        end = End $ Date { dateDay = 6, dateMonth = March, dateYear = 2018 }
+
+      weekOf sunday `shouldBe` (start, end)
+
+  describe "stafferOnCal" $ do
+    context "when staffer's name is in the event summary" $ do
+      it "is true" $ do
+        let
+          name = "Suze Z"
+
+          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+
+          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
+          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1 = GCalEvent "suze c" Nothing event1Start event1End
+
+          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
+          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+          event2 = GCalEvent "well suZe z has fun!" Nothing event2Start event2End
+
+        stafferOnCal name [event1, event2] `shouldBe` True
+
+    context "when staffer's name is NOT in the event summary" $ do
+      it "is false" $ do
+        let
+          name = "Suze Z"
+
+          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+
+          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
+          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1 = GCalEvent "suze c" Nothing event1Start event1End
+
+          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
+          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+          event2 = GCalEvent "well suZe k has fun!" Nothing event2Start event2End
+
+        stafferOnCal name [event1, event2] `shouldBe` False
+
+  describe "hasOverlap" $ do
+    context "when a new event has overlaps with existing events" $ do
+      it "is true" $ do
+        let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+
+            prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
+            prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+            prevEvent = GCalEvent "" Nothing prevEventStart prevEventEnd
+
+            prevEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
+            prevEvent2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+            prevEvent2 = GCalEvent "" Nothing prevEvent2Start prevEvent2End
+
+            newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
+            newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+            newEvent = GCalEvent "" Nothing newEventStart newEventEnd
+
+        hasOverlap [prevEvent, prevEvent2] newEvent `shouldBe` True
+
+    context "when a new event has no overlaps with existing events" $ do
+      it "is false" $ do
+        let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+
+            prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
+            prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+            prevEvent = GCalEvent "" Nothing prevEventStart prevEventEnd
+
+            newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
+            newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+            newEvent = GCalEvent "" Nothing newEventStart newEventEnd
+
+        hasOverlap [prevEvent] newEvent `shouldBe` False
+
+  describe "onlyActive" $ do
+    context "with active an inactive contacts" $ do
+      it "filters out inactive contacts" $ do
+        let
+          nowDate = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          past = getInternTime utcOffset $ advanceDate (Days (-3)) nowDate
+          future = getInternTime utcOffset $ advanceDate (Days 3) nowDate
+          now = getInternTime utcOffset $ nowDate
+
+          active1 = Contact "Jez" "1561351" Nothing 1
+          active2 = Contact "Big Suze" "156131" (Just past) 2
+          inactive = Contact "Mark" "8946531" (Just future) 3
+
+        onlyActive now [active1, inactive, active2] `shouldBe` [Active active1, Active active2]
+
+
+    context "with only inactive contacts" $ do
+      it "is empty" $ do
+        let
+          nowDate = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          future = getInternTime utcOffset $ advanceDate (Days 3) nowDate
+          distantFuture = getInternTime utcOffset $ advanceDate (Days 30) nowDate
+          now = getInternTime utcOffset $ nowDate
+
+          inactive1 = Contact "Big Suze" "156131" (Just future) 2
+          inactive2 = Contact "Mark" "8946531" (Just distantFuture) 3
+
+        onlyActive now [inactive1, inactive2] `shouldBe` []
+
 
 -- helpers
 
