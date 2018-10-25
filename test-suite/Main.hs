@@ -832,6 +832,23 @@ sunday:
 
         onlyActive now [inactive1, inactive2] `shouldBe` []
 
+  describe "displaying gaps" $ do
+    it "shows correctly formatted times" $ do
+      let sun = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime sun $ TimeOfDay 6 0 0 0
+          sunEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime sun $ TimeOfDay 23 15 0 0
+
+          mon = Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
+          monStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime mon $ TimeOfDay 12 50 0 0
+          monEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime mon $ TimeOfDay 18 15 0 0
+
+          gaps = Gaps [ Period sunStart sunEnd Nothing
+                      , Period monStart monEnd Nothing
+                      ]
+
+          expectedOutput = "Open shifts: \n[Sun 4 6AM to 11:15PM\n, Mon 5 12:50PM to 6:15PM]\nRespond with \"shifts\" to claim one right now"
+
+      displayGaps gaps `shouldBe` expectedOutput
 
 -- helpers
 

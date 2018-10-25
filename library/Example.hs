@@ -9,14 +9,13 @@
 
 
 -- TODO:
--- expose notification tasks
--- deployment
--- cron tasks
+-- test task for who will be msged by nagger
 -- "commands" (help) command
 -- suspend response should show month
 -- limit max suspension days
 -- check for ruby pairity
 -- improve cmd matching
+-- task for verifying env vars and config files
 -- split <say> nodes into <gather> parent
 -- test parsing contacts.yaml
 -- consider how/when to number gaps (for selection) (or to make more like ruby version)
@@ -25,9 +24,15 @@
 -- consider switching to megaparsec
 -- contacts in db
 -- error logging/reporting
+-- handle DST and read TZ from config file
 -- push env vars (and other?) into State monad
+-- only create gauth token when old one expires
+
 
 -- DONE:
+-- deployment
+-- cron tasks
+-- expose notification tasks
 -- tasks leave alone suspended users
 -- fix adding extra contacts on write
 -- "shifts" should look at next 7 days
@@ -61,12 +66,14 @@ import qualified Data.HashMap.Strict as HMap
 import Servant.XML
 import Web.Internal.FormUrlEncoded (Form, unForm, FromForm(..))
 import Servant.Server (Server)
+import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (setLogger, setPort, runSettings, defaultSettings)
 import Network.Wai.Logger (withStdoutLogger)
 import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
 import Time.System (localDateCurrentAt)
 import qualified Data.Map as Map
 import Formatting (format, (%))
+import qualified Formatting.Formatters as FMT
 import Formatting.Formatters (left, int)
 import Data.Text.Prettyprint.Doc (defaultLayoutOptions, layoutPretty, Pretty(..), vsep, (<+>))
 import Data.Maybe (catMaybes)
@@ -99,15 +106,13 @@ import Servant ( Handler
                , Post
                , FormUrlEncoded
                , ReqBody
-               , Get
                , Application
                , Proxy(..)
-               , JSON
                , addHeader
                , serve
                , (:>)
                , (:<|>)(..))
-import Text.Parsec (ParseError
+import Text.Parsec ( ParseError
                    , ParsecT
                    , many1
                    , anyChar
@@ -265,7 +270,6 @@ getEvents ((Start start), (End end)) = do
           <> calID
           <> "/events"
 
---postEvent :: GCalEventI -> IO BSLI.ByteString
 postEvent e = do
   loadEnv
   calId <- getEnv "GCAL_ID"
@@ -396,7 +400,6 @@ data Period a = Period { periodStart :: a
                        , periodEnd :: a
                        , periodName :: Maybe Text
                        } deriving (Show, Eq, Functor)
-
 
 -- TODO: push TZ from shifttime into shiftweek (we don't want to allow different
 -- zones per shift
@@ -654,11 +657,14 @@ sendSms msg = do
     liftIO $ print resp
 
 loadContacts :: IO [Contact]
-loadContacts = decodeFileThrow "contacts.yml"
+loadContacts = decodeFileThrow . (<> "/contacts.yml") =<< configDir
+
+configDir :: IO String
+configDir = loadEnv >> getEnv "CONFIG_DIR"
 
 -- TODO: Read in TZ
 loadShifts :: IO ShiftWeekTime
-loadShifts = validateShiftWeek <$> decodeFileThrow "schedule.yml"
+loadShifts = validateShiftWeek <$> (decodeFileThrow . (<> "/schedule.yml") =<< configDir)
 
 weekStart :: WeekDay
 weekStart = Wednesday
@@ -673,8 +679,8 @@ prevWeekStart d
   | getWeekDay d == weekStart = d
   | otherwise = prevWeekStart $ advanceDate (Days (-1)) d
 
-testEmergencySMS :: IO ()
-testEmergencySMS = do
+emergencySMS :: IO ()
+emergencySMS = do
   today    <- getInternTime' <$> getToday
   tomorrow <- getTomorrow
   contacts <- onlyActive today <$> loadContacts
@@ -688,7 +694,8 @@ testEmergencySMS = do
   if not . null. runGaps $ gaps
     then let msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
          in
-         sendSmsTo contacts (pack . show $ msg)
+           (print $ "sending emergency alert to: " <> (pack . show $ contacts))
+           >> sendSmsTo contacts (pack . show $ msg)
     else print ("no gaps tomorrow" :: Text)
 
 onlyActive :: InternTime -> [Contact] -> [Active Contact]
@@ -717,17 +724,51 @@ testNagAlert staffer = do
              gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
          in print $ "couldn't find " <> staffer <> pack " on cal\n" <> gapMsg
 
+-- TODO: extract and test logic
+nagAlert :: IO ()
+nagAlert = do
+  print "Nagger notifications starting"
+  today <- getToday
+  let
+    todayTZ = HG.localTimeGetTimezone today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+    currentDayIntern = getInternTime' today
+  sched <- loadShifts
+  rawEvents <- getEvents (start, end)
+  events <- validateGCalEvent' `traverse` rawEvents
+  contacts <- onlyActive currentDayIntern <$> loadContacts
+  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  if null . runGaps $ gaps
+    then pure ()
+    else foldr (msgLaxContacts events gaps) (pure ()) contacts
+
+  where
+
+      msgLaxContacts events (Gaps gaps) c _ =
+        let name = contactName . runActive $ c
+        in
+          if stafferOnCal name events
+          then print $ "Name already on shift: " <> name
+          else let gapMsg = pack $ show $ pretty $ (fmap . fmap) internToLocal gaps
+                   preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Please take a shift:\n"
+               in print ("couldn't find " <> name <> " on cal")
+                  >> sendSmsTo [c] (preMsg <> gapMsg)
+
 stafferOnCal :: Foldable f => Text -> f (GCalEvent a) -> Bool
 stafferOnCal staffer = any (hasName . gCalSummary)
   where
     hasName = contains $ nameParser staffer
 
-
 -- TODO: extract and test more of this logic
 -- TODO: don't return gaps from a previous shift today
-testGapsThisWeekAlert :: IO ()
-testGapsThisWeekAlert = do
+-- TODO: fix Pretty instance for gaps
+gapsThisWeekAlert :: IO ()
+gapsThisWeekAlert = do
   today <- getToday
+  contacts <- onlyActive (getInternTime' today) <$> loadContacts
   let
     todayTZ = HG.localTimeGetTimezone today
     (_, endDate) = weekOf $ HG.localTimeUnwrap today
@@ -738,7 +779,22 @@ testGapsThisWeekAlert = do
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
-  print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+  sendSmsTo contacts $ fump $ (fmap . fmap . fmap) internToLocal gaps
+
+-- TODO: rename
+dump = renderStrict . layoutPretty defaultLayoutOptions
+
+-- TODO: rename this shit
+fump :: Pretty a => a -> Text
+fump = dump . pretty
+
+-- TODO: remove this (it was just here for debugging)
+-- TODO: Replace with test of Pretty instace for gaps
+displayGaps :: Gaps [Period (DisplayTZ (LocalTime HG.Elapsed))] -> Text
+displayGaps = fump
+
+-- TODO: Write a test for the above pretty instance. It's fucked in the
+-- binary
 
 testGapAlert :: Int -> Int -> IO ()
 testGapAlert from to = do
@@ -788,7 +844,7 @@ summaryDurationsInRange :: StartTime -> EndTime -> IO [(Text, Hours, Minutes)]
 summaryDurationsInRange s e = eventBySummDuration <$> eventsInRange s e
 
 -- ensure that we convert to correct TZ for display purposes
-newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq)
+newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq, Show)
 
 -- track that number is a date for display
 newtype DisplayDate a = DisplayDate { runDD :: a } deriving (Functor)
@@ -817,8 +873,10 @@ instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle
 -- TODO: number these responses
 instance (Pretty a, Monoid a, Eq a) => Pretty (Gaps a) where
   pretty (Gaps a) | a == mempty = "No gaps found this week!"
-                  | otherwise   = vsep ["Found gaps: "
-                                       , pretty a]
+                  | otherwise   = vsep ["Open shifts: "
+                                       , pretty a
+                                       , "Respond with \"shifts\" to claim one right now"
+                                       ]
 
 
 -- instance ToJSON (Gaps [Period InternTime]) where
@@ -857,14 +915,36 @@ instance Pretty (DisplayTZ (DisplayDate Int)) where
 
 instance Pretty (DisplayTZ (LocalTime HG.Elapsed)) where
   pretty (DisplayTZ e) =
-    pretty $ DisplayTZ time
+    pretty $ DisplayTZ $ toTime e
     where
-      time = HG.timeGetTimeOfDay . HG.localTimeUnwrap $ e
+      toTime = dtTime . HG.timeGetDateTimeOfDay . HG.localTimeUnwrap
 
+  -- TODO: open Hourglass issue for broken version:
+  -- in compiled code (not in the repl), `timeGetDateTimeOfDay` always returns
+  -- zero'd time
+        -- toTime !x = HG.timeGetDateTimeOfDay . HG.localTimeUnwrap $ x
+
+
+  -- TODO: clean up
 instance Pretty (DisplayTZ TimeOfDay) where
-  pretty t = pretty $ format (left 2 '0' % ":" % left 2 '0')
-             ((\(Hours h) -> h) . todHour . runDTZ $ t)
-             ((\(Minutes m) -> m) . todMin . runDTZ $ t)
+  pretty (DisplayTZ t) = do
+    let formattedTime =
+          if minutes == 0
+          then format (FMT.int % FMT.text) hoursFmt meridian
+          else format (FMT.int % ":" % left 2 '0' % FMT.text) hoursFmt minutes meridian
+
+    pretty $ formattedTime
+
+    where
+      hoursFmt = if (todHour t) <= 12
+             then (\(Hours a) -> a) (todHour t)
+             else (\(Hours a) -> a) (todHour t) - 12
+
+      minutes = (\(Minutes a) -> a) (todMin t)
+
+      meridian = if (todHour t) < 12
+                 then "AM"
+                 else "PM"
 
 instance Pretty (Concise (DisplayTZ Month)) where
   pretty (Concise (DisplayTZ January))  = "Jan"
@@ -1029,12 +1109,8 @@ instance FromForm TwilioCallData where
         pure $ TCallData (head from) (head to)
 
       handleErr = maybe (Left "Failure parsing twilio call form-data") Right
--- /contacts.json
--- /sms.xml
--- /call.xml
 
-type API = "contacts" :> Get '[JSON] [Contact]
-      :<|> "sms" :> Header "Cookie" Cookies :> ReqBody '[FormUrlEncoded] TwilioMsgData :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+type API = "sms" :> Header "Cookie" Cookies :> ReqBody '[FormUrlEncoded] TwilioMsgData :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
       :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData :> Post '[XML] TwilioCallResponse
 
 twimlCall :: Text -> TwilioCallResponse
@@ -1044,16 +1120,15 @@ twimlMsg :: Text -> TwilioMsgResponse
 twimlMsg = TMsgResp
 
 server :: Server API
-server = liftIO loadContacts
-    :<|> twilMsg
+server = twilMsg
     :<|> twilCall
+
   where
     twilMsg :: Maybe Cookies -> TwilioMsgData -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     twilMsg cookies inMsg = do
       contacts <- liftIO loadContacts
       let inboundNumber = (msgFrom inMsg)
           mContact = find ((inboundNumber ==) . contactNumber) contacts
-      liftIO (print cookies)
       liftIO (print inMsg)
       case mContact of
         (Just c) ->
@@ -1137,7 +1212,7 @@ suspendContact c t = do
   writeContacts newContacts
 
 writeContacts :: [Contact] -> IO ()
-writeContacts = encodeFile "contacts.yml"
+writeContacts cs = flip encodeFile cs . (<> "/contacts.yml") =<< configDir
 
 newtype Days a = Days a deriving (Show, Eq)
 
@@ -1154,13 +1229,6 @@ hasOverlap onCal newEvent = ([eventPeriod] /=) $ dayGetGaps [eventPeriod] onCal
 
 periodize :: GCalEventI -> PeriodIntern
 periodize e = Period (gCalStart e) (gCalEnd e) Nothing
-
--- TODO: rename this shit
-fump :: Pretty a => a -> Text
-fump = dump . pretty
-
--- TODO: rename
-dump = renderStrict . layoutPretty defaultLayoutOptions
 
 -- TODO: needs instance TOJSON periods a
 addAvailableshiftsCookie :: IxGaps InternTime -> TwilioMsgResponse -> Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse
@@ -1207,26 +1275,26 @@ instance FromHttpApiData Cookies where
 startServer :: IO ()
 startServer = do
   withStdoutLogger $ \appLogger -> do
-    let settings = setPort 3000 $ setLogger appLogger defaultSettings
+    let settings = setPort 3000 $ setLogger (logHeaders appLogger) defaultSettings
     runSettings settings app
 
 -- -- type ApacheLogger = Request -> Status -> Maybe Integer -> IO ()
 -- Use this to log all request headers
--- logHeaders logger req s i = print (requestHeaders req) >> logger req s i
+logHeaders logger req s i = print (requestHeaders req) >> logger req s i
 
-thisWeekGaps :: IO (Gaps [Period InternTime])
-thisWeekGaps = do
-  today <- getToday
-  let
-    todayTZ = HG.localTimeGetTimezone today
-    (_, endDate) = weekOf $ HG.localTimeUnwrap today
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  sched <- loadShifts
-  rawEvents <- getEvents (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  pure $ getMinGapsInRange minGapDuration sched (start, end) events
+-- thisWeekGaps :: IO (Gaps [Period InternTime])
+-- thisWeekGaps = do
+--   today <- getToday
+--   let
+--     todayTZ = HG.localTimeGetTimezone today
+--     (_, endDate) = weekOf $ HG.localTimeUnwrap today
+--     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+--     start = getInternTime' <$> Start today
+--     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+--   sched <- loadShifts
+--   rawEvents <- getEvents (start, end)
+--   events <- validateGCalEvent' `traverse` rawEvents
+--   pure $ getMinGapsInRange minGapDuration sched (start, end) events
 
 gapsNowTo :: Days Int -> IO (Gaps [Period InternTime])
 gapsNowTo d = do
@@ -1240,22 +1308,22 @@ gapsNowTo d = do
   events <- validateGCalEvent' `traverse` rawEvents
   pure $ getMinGapsInRange minGapDuration sched (start, end) events
 
-thisWeekGapsText :: IO Text
-thisWeekGapsText = do
-  today <- getToday
-  let
-    todayTZ = HG.localTimeGetTimezone today
-    (_, endDate) = weekOf $ HG.localTimeUnwrap today
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  sched <- loadShifts
-  rawEvents <- getEvents (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
-      dGaps = (fmap . fmap . fmap) internToLocal gaps
---  print . toJSON . indexGaps $ dGaps
-  pure . renderStrict . layoutPretty defaultLayoutOptions . pretty $ indexGaps dGaps
+-- thisWeekGapsText :: IO Text
+-- thisWeekGapsText = do
+--   today <- getToday
+--   let
+--     todayTZ = HG.localTimeGetTimezone today
+--     (_, endDate) = weekOf $ HG.localTimeUnwrap today
+--     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+--     start = getInternTime' <$> Start today
+--     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+--   sched <- loadShifts
+--   rawEvents <- getEvents (start, end)
+--   events <- validateGCalEvent' `traverse` rawEvents
+--   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+--       dGaps = (fmap . fmap . fmap) internToLocal gaps
+-- --  print . toJSON . indexGaps $ dGaps
+--   pure . renderStrict . layoutPretty defaultLayoutOptions . pretty $ indexGaps dGaps
 
 
 

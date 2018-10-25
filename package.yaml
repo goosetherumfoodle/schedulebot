@@ -13,7 +13,7 @@ maintainer: "Jesse Hanley"
 
 extra-source-files:
 - CHANGELOG.md
-- LICENSE.md
+- LICENSE
 - package.yaml
 - README.md
 - stack.yaml
@@ -54,13 +54,58 @@ library:
   source-dirs: library
 
 executables:
-  scheduler-fp:
+  server:
     source-dirs: executable
-    main: Main.hs
+    main: MainServer.hs
     dependencies:
     - base
     - scheduler-fp
     ghc-options:
+    - -main-is MainServer
+    - -split-objs
+    - -O2
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+
+  alert-nag:
+    source-dirs: executable
+    main: Alert/Nag.hs
+    dependencies:
+    - base
+    - scheduler-fp
+    ghc-options:
+    - -main-is Alert.Nag
+    - -split-objs
+    - -O2
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+
+  alert-emergency:
+    source-dirs: executable
+    main: Alert/Emergency.hs
+    dependencies:
+    - base
+    - scheduler-fp
+    ghc-options:
+    - -main-is Alert.Emergency
+    - -split-objs
+    - -O2
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+
+  alert-week:
+    source-dirs: executable
+    main: Alert/Week.hs
+    dependencies:
+    - base
+    - scheduler-fp
+    ghc-options:
+    - -main-is Alert.Week
+    - -split-objs
+    - -O2
     - -rtsopts
     - -threaded
     - -with-rtsopts=-N
