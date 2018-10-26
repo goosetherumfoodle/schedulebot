@@ -13,6 +13,7 @@
 -- suspend response should show month
 -- check for ruby pairity
 -- improve cmd matching
+-- port 1877
 -- limit max suspension days
 -- task for verifying env vars and config files
 -- split <say> nodes into <gather> parent
@@ -709,10 +710,11 @@ emergencySMS = do
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
   if not . null. runGaps $ gaps
-    then let msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
+    then let preMsg = "Shift not covered tomorrow!\n"
+             msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
          in
            (print $ "sending emergency alert to: " <> (pack . show $ contacts))
-           >> sendSmsTo contacts (pack . show $ msg)
+           >> sendSmsTo contacts (pack . show $ preMsg <> msg)
     else print ("no gaps tomorrow" :: Text)
 
 onlyActive :: InternTime -> [Contact] -> [Active Contact]
@@ -765,10 +767,10 @@ nagAlert = do
 
   where
 
-      msgLaxContacts (Gaps gaps) c _ =
+      msgLaxContacts gaps c _ =
         let name = contactName . runActive $ c
-            gapMsg = pack $ show $ pretty $ (fmap . fmap) internToLocal gaps
-            preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Please take a shift:\n"
+            gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+            preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
         in print ("couldn't find " <> name <> " on cal")
            >> sendSmsTo [c] (preMsg <> gapMsg)
 
@@ -793,10 +795,13 @@ gapsThisWeekAlert = do
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
     start = getInternTime' <$> Start today
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  print $ "TODAY: " <> show today <> "\n"
+  print $ "END OF WEEK: " <> show endDate <> "\n"
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  print $ "GAPS: " <> show gaps
   sendSmsTo contacts $ fump $ (fmap . fmap . fmap) internToLocal gaps
 
 -- TODO: rename
@@ -892,24 +897,12 @@ instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle
       prettyIx (i, p) = pretty i <> ":" <+> pretty p
 
 -- TODO: number these responses
-instance (Pretty a, Monoid a, Eq a) => Pretty (Gaps a) where
-  pretty (Gaps a) | a == mempty = "No gaps found this week!"
-                  | otherwise   = vsep ["Open shifts: "
-                                       , pretty a
-                                       , "Respond with \"shifts\" to claim one right now"
-                                       ]
+instance (Pretty a) => Pretty (Gaps [a]) where
+  pretty (Gaps []) = "No gaps found this week!"
+  pretty (Gaps a) = vsep $ ["Open shifts: "]
+                            <> fmap pretty a
+                            <> ["Respond with \"shifts\" to claim one right now"]
 
-
--- instance ToJSON (Gaps [Period InternTime]) where
---   toJSON (Gaps a) = toJSON $ fst $ foldl' fn (HMap.empty, 1) a
---     where
---       fn :: (Object, Int) -> Period InternTime -> (Object, Int)
---       fn (hm, i) per = (HMap.insert (pack . show $ i) (toJSON per) hm, i + 1)
-
--- instance (Functor a, Foldable a, Pretty b) => Pretty (OneIx (a b)) where
---   pretty (OneIx a) = vsep $ toList $ fmap fn a
---     where
---       fn a = "1: " <> pretty a
 
 instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
   pretty (Period s _ (Just name)) = pretty (timeGetDate <$> s) <+> pretty name
@@ -917,7 +910,7 @@ instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
                                     <+> "to" <+> pretty e
 
 instance Pretty (DisplayTZ Date) where
-  pretty d = pretty  (getWeekDay <$> d) <+> pretty (DisplayDate . dateDay <$> d)
+  pretty d = pretty  (getWeekDay <$> d)
 
 instance Pretty (DisplayTZ (LocalTime Date)) where
   pretty = pretty . fmap HG.localTimeUnwrap
@@ -951,8 +944,8 @@ instance Pretty (DisplayTZ TimeOfDay) where
   pretty (DisplayTZ t) = do
     let formattedTime =
           if minutes == 0
-          then format (FMT.int % FMT.text) hoursFmt meridian
-          else format (FMT.int % ":" % left 2 '0' % FMT.text) hoursFmt minutes meridian
+          then format (FMT.int ) hoursFmt
+          else format (FMT.int % ":" % left 2 '0' ) hoursFmt minutes
 
     pretty $ formattedTime
 
@@ -963,9 +956,9 @@ instance Pretty (DisplayTZ TimeOfDay) where
 
       minutes = (\(Minutes a) -> a) (todMin t)
 
-      meridian = if (todHour t) < 12
-                 then "AM"
-                 else "PM"
+      -- meridian = if (todHour t) < 12
+      --            then "AM"
+      --            else "PM"
 
 instance Pretty (Concise (DisplayTZ Month)) where
   pretty (Concise (DisplayTZ January))  = "Jan"
@@ -1215,11 +1208,12 @@ performCmd (UnrecognizedCmd d) =
   pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
 
 performCmd AvailableShifts = do
-  gaps <- indexGaps <$> (liftIO $ gapsNowTo $ Days 7)
+  gaps <- indexGaps <$> (liftIO . gapsNowTo . Days $ 7)
+  let preMsg = "Open shifts this week.\nRespond with the number to claim it.\n"
   pure
     $ addAvailableshiftsCookie
     gaps
-    (twimlMsg . fump . (fmap . fmap) internToLocal $ gaps)
+    (twimlMsg . (preMsg <>) . fump . (fmap . fmap) internToLocal $ gaps)
 
 performCmd UnrecognizedNumber = do
   pure $ destroyCookie $ twimlMsg ""

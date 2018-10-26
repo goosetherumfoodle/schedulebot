@@ -878,11 +878,13 @@ sunday:
   describe "daysUntil" $ do
     context "3 days to target weekday" $ do
       it "evalutes to 3" $ do
-        pending
+        let sunday = getInternTime utcOffset $ Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        daysUntil utcOffset sunday Wednesday `shouldBe` Days 3
 
     context "on target weekday" $ do
       it "evalutes to zero" $ do
-        pending
+        let sunday = getInternTime utcOffset $ Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        daysUntil utcOffset sunday Sunday `shouldBe` Days 0
 
 -- helpers
 
