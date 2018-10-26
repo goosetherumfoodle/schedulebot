@@ -4,17 +4,16 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 {-# OPTIONS_GHC -fwarn-unused-do-bind #-}
 
 
 -- TODO:
--- test task for who will be msged by nagger
--- "commands" (help) command
 -- suspend response should show month
--- limit max suspension days
 -- check for ruby pairity
 -- improve cmd matching
+-- limit max suspension days
 -- task for verifying env vars and config files
 -- split <say> nodes into <gather> parent
 -- test parsing contacts.yaml
@@ -23,13 +22,16 @@
 -- consider rendering shift select list from same data as shifts json (first make a map?)
 -- consider switching to megaparsec
 -- contacts in db
+-- announcement command
 -- error logging/reporting
 -- handle DST and read TZ from config file
 -- push env vars (and other?) into State monad
 -- only create gauth token when old one expires
 
-
 -- DONE:
+-- default suspension days if no number specified
+-- "commands" (help) command
+-- test task for who will be msged by nagger
 -- deployment
 -- cron tasks
 -- expose notification tasks
@@ -57,6 +59,7 @@ module Example where
 
 import Prelude hiding (until)
 
+import Text.RawString.QQ (r)
 import Data.List (foldl', find)
 import qualified Network.URI.Encode as URI
 import Xmlbf (ToXml(..), element', text)
@@ -114,7 +117,7 @@ import Servant ( Handler
                , (:<|>)(..))
 import Text.Parsec ( ParseError
                    , ParsecT
-                   , many1
+                   , many
                    , anyChar
                    , manyTill
                    , parse
@@ -169,7 +172,6 @@ import Data.Hourglass ( UTC(..)
                       , fromSeconds
                       , timeGetDate
                       )
-
 data Contact = Contact { contactName :: Text
                        , contactNumber :: Text
                        , contactSuspendUntil :: Maybe InternTime
@@ -342,7 +344,11 @@ instance ToJSON Contact where
 
 validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
 validateGCalEvent (GCalEvent smry dsc end st) =
-  GCalEvent <$> pure smry <*> pure dsc <*> (parse8601 end) <*> (parse8601 st)
+  GCalEvent
+  <$> pure (toLower . strip $ smry)
+  <*> pure (toLower . strip <$> dsc)
+  <*> (parse8601 end)
+  <*> (parse8601 st)
 
 validateGCalEvent' :: RawGCalEvent -> IO GCalEventI
 validateGCalEvent' = either throwIO pure . validateGCalEvent
@@ -412,19 +418,30 @@ data ShiftWeek a = ShiftW { wkMon :: [Period a]
                           , wkSun :: [Period a]
                           } deriving (Show, Eq)
 
---parseSuspendDays :: Text -> Maybe (Days Int)
-suspendDaysParser :: ParsecT Text u Identity (Maybe (Days Int))
+suspendDaysParser :: ParsecT Text u Identity (Maybe (Maybe (Days Int)))
 suspendDaysParser = do
   spaces
   _ <- string "suspend"
   spaces
-  d <- (readMaybe :: String -> Maybe Int) <$> many1 digit
-  pure $ Days <$> d
+  d <- (readMaybe :: String -> Maybe Int) <$> many digit
+  pure $ pure $ Days <$> d
 
-parseSuspendDays :: Text -> Maybe (Days Int)
+parseSuspendDays :: Text -> Maybe (Maybe (Days Int))
 parseSuspendDays t = handler $ parse suspendDaysParser "suspendDays" (toLower t)
   where
     handler = either (const Nothing) id
+
+parseHelp :: Text -> Bool
+parseHelp t = handler $ parse helpParser "Help" (toLower t)
+  where
+    handler = either (const False) (const True)
+
+helpParser :: ParsecT Text u Identity ()
+helpParser = do
+  spaces
+  _ <- string "command"
+  spaces
+  pure ()
 
 clockTimeParser :: ParsecT Text u Identity (String, String)
 clockTimeParser = do
@@ -741,21 +758,22 @@ nagAlert = do
   events <- validateGCalEvent' `traverse` rawEvents
   contacts <- onlyActive currentDayIntern <$> loadContacts
   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+      toNag = whomToNag events contacts
   if null . runGaps $ gaps
-    then pure ()
-    else foldr (msgLaxContacts events gaps) (pure ()) contacts
+    then pure () -- send no alerts if there are no gaps
+    else foldr (msgLaxContacts gaps) (pure ()) toNag
 
   where
 
-      msgLaxContacts events (Gaps gaps) c _ =
+      msgLaxContacts (Gaps gaps) c _ =
         let name = contactName . runActive $ c
-        in
-          if stafferOnCal name events
-          then print $ "Name already on shift: " <> name
-          else let gapMsg = pack $ show $ pretty $ (fmap . fmap) internToLocal gaps
-                   preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Please take a shift:\n"
-               in print ("couldn't find " <> name <> " on cal")
-                  >> sendSmsTo [c] (preMsg <> gapMsg)
+            gapMsg = pack $ show $ pretty $ (fmap . fmap) internToLocal gaps
+            preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Please take a shift:\n"
+        in print ("couldn't find " <> name <> " on cal")
+           >> sendSmsTo [c] (preMsg <> gapMsg)
+
+whomToNag :: [GCalEventI] -> [Active Contact] -> [Active Contact]
+whomToNag es = filter $ not . flip stafferOnCal es . contactName . runActive
 
 stafferOnCal :: Foldable f => Text -> f (GCalEvent a) -> Bool
 stafferOnCal staffer = any (hasName . gCalSummary)
@@ -824,6 +842,9 @@ testGapsTomorrowAlert = do
 -- this should eventually be in a state monad
 getToday :: IO (LocalTime Date)
 getToday = (fmap . fmap . fmap) dtDate localDateCurrentAt utcOffset
+
+getCurrentTime :: IO InternTime
+getCurrentTime = getInternTime' <$> localDateCurrentAt utcOffset
 
 -- -- for fun
 -- getTodayStub :: IO (LocalTime Date)
@@ -1110,8 +1131,11 @@ instance FromForm TwilioCallData where
 
       handleErr = maybe (Left "Failure parsing twilio call form-data") Right
 
-type API = "sms" :> Header "Cookie" Cookies :> ReqBody '[FormUrlEncoded] TwilioMsgData :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
-      :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData :> Post '[XML] TwilioCallResponse
+type API = "sms" :> Header "Cookie" Cookies
+                 :> ReqBody '[FormUrlEncoded] TwilioMsgData
+                 :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+      :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData
+                  :> Post '[XML] TwilioCallResponse
 
 twimlCall :: Text -> TwilioCallResponse
 twimlCall = TCallResp
@@ -1127,12 +1151,13 @@ server = twilMsg
     twilMsg :: Maybe Cookies -> TwilioMsgData -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     twilMsg cookies inMsg = do
       contacts <- liftIO loadContacts
+      now <- liftIO getCurrentTime
       let inboundNumber = (msgFrom inMsg)
           mContact = find ((inboundNumber ==) . contactNumber) contacts
       liftIO (print inMsg)
       case mContact of
         (Just c) ->
-          performCmd $ getCmd inMsg c $ Map.fromList <$> ((fmap . fmap . fmap) BSL.fromStrict cookies)
+          performCmd $ getCmd now inMsg c $ Map.fromList <$> ((fmap . fmap . fmap) BSL.fromStrict cookies)
         Nothing -> do
           liftIO $ print ("Unrecognized number\n" :: Text)
           performCmd UnrecognizedNumber
@@ -1155,29 +1180,41 @@ instance FromJSON InternTime where
     either (fail . show) pure $ parse8601 $ ISO8601 txt
 
 data Cmd =
-    Availableshifts
+    AvailableShifts
   | ClaimShift Contact (Period InternTime)
   | Suspend Contact (Days Int)
+  | Help
   | UnrecognizedNumber
   | UnrecognizedCmd TwilioMsgData
 
-getCmd :: TwilioMsgData -> Contact -> Maybe CookiesMap -> Cmd
+getCmd :: InternTime -> TwilioMsgData -> Contact -> Maybe CookiesMap -> Cmd
 
-getCmd d c (Just cm) | (Just period) <- isClaimShift d cm = ClaimShift c period
-                     | otherwise = getCmd d c Nothing
+getCmd now d c (Just cm) | (Just period) <- isClaimShift d cm = ClaimShift c period
+                         | otherwise = getCmd now d c Nothing
 
--- TODO: horse: prolly use regex and capture the goddamn "suspend n" number
+getCmd now d c Nothing | ("shifts":_) <- Text.words . toLower . msgBody $ d = AvailableShifts
+                       | Just (Just days) <- parseSuspendDays . toLower . msgBody $ d  = Suspend c days
+                       | Just Nothing <- parseSuspendDays . toLower . msgBody $ d  = Suspend c $ daysUntil now weekStart
+                       | True <- parseHelp . toLower . msgBody $ d  = Help
+                       | otherwise = UnrecognizedCmd d
 
-getCmd d c Nothing | ("shifts":_) <- Text.words . toLower . msgBody $ d = Availableshifts
-                   | Just days <- parseSuspendDays .toLower . msgBody $ d  = Suspend c days
-                   | otherwise = UnrecognizedCmd d
+daysUntil :: InternTime -> WeekDay -> (Days Int)
+daysUntil now end =
+  Days $ daysUntilIter 0 (timeGetDate nowInLocal) end
+  where
+    nowInLocal =
+      HG.localTimeSetTimezone localOffset . runIntern $ now
+
+daysUntilIter :: Int -> Date -> WeekDay -> Int
+daysUntilIter counter day end | (getWeekDay day) == end = counter
+                              | otherwise = daysUntilIter (counter + 1) (nextDate day) end
 
 performCmd :: Cmd -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse) --Handler TwilioMsgResponse
 
 performCmd (UnrecognizedCmd d) =
   pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
 
-performCmd Availableshifts = do
+performCmd AvailableShifts = do
   gaps <- indexGaps <$> (liftIO $ gapsNowTo $ Days 7)
   pure
     $ addAvailableshiftsCookie
@@ -1202,6 +1239,9 @@ performCmd (Suspend c d) = do
   let until = advanceDate d <$> today
   liftIO $ suspendContact c $ getInternTime' until
   pure $ destroyCookie $ twimlMsg $ dump $ pretty ("Notificaitons silenced until: " :: Text) <> (pretty . displayTZ localOffset $ until)
+
+performCmd Help =
+  pure $ destroyCookie $ twimlMsg $ dump $ pretty helpText
 
 suspendContact :: Contact -> InternTime -> IO ()
 suspendContact c t = do
@@ -1325,6 +1365,11 @@ gapsNowTo d = do
 -- --  print . toJSON . indexGaps $ dGaps
 --   pure . renderStrict . layoutPretty defaultLayoutOptions . pretty $ indexGaps dGaps
 
+helpText :: Text
+helpText = [r|
+Available commands:
+"shifts": display 7 days worth of unclaimed shifts.
+"suspend (N)": Suspend for number of days (defaults to end of the shift-week)|]
 
 
 

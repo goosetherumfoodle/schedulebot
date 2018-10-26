@@ -40,6 +40,7 @@ library:
   - vector
   - parsec
   - twilio
+  - raw-strings-qq
   - yaml
   - prettyprinter
   - formatting

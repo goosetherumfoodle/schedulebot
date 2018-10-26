@@ -21,11 +21,18 @@ spec :: Spec
 spec = parallel $ do
   describe "parsing" $ do
     describe "parseSuspendDays" $ do
-      context "with valid input" $ do
+      context "with valid input and a number" $ do
         it "should retrieve days" $ do
           let text = " susPend \t123 99  "
 
-          parseSuspendDays text `shouldBe` (Just (Days 123))
+          parseSuspendDays text `shouldBe` (Just (Just (Days 123)))
+
+      context "with valid input but no number" $ do
+        it "should retrieve days" $ do
+          let text = " susPend   "
+
+          parseSuspendDays text `shouldBe` (Just Nothing)
+
 
       context "with invalid input" $ do
         it "should be nothing" $ do
@@ -849,6 +856,33 @@ sunday:
           expectedOutput = "Open shifts: \n[Sun 4 6AM to 11:15PM\n, Mon 5 12:50PM to 6:15PM]\nRespond with \"shifts\" to claim one right now"
 
       displayGaps gaps `shouldBe` expectedOutput
+
+  describe "selecting which staffers to nag" $ do
+    it "only selects staffers who don't have a shift yet" $ do
+      let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          monday = Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
+
+          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
+          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+          event1 = GCalEvent "Jeffers" Nothing event1Start event1End
+
+          event2Start = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 15 30 0 0)
+          event2End = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 18 00 0 0)
+          event2 = GCalEvent "  beLINda " Nothing event2Start event2End
+
+          onSched = Active $ Contact "Belinda" "156131" Nothing 1
+          unScheduled = Active $ Contact "Big Suze" "156131" Nothing 8
+
+      whomToNag [event1, event2] [onSched, unScheduled] `shouldBe` [unScheduled]
+
+  describe "daysUntil" $ do
+    context "3 days to target weekday" $ do
+      it "evalutes to 3" $ do
+        pending
+
+    context "on target weekday" $ do
+      it "evalutes to zero" $ do
+        pending
 
 -- helpers
 
