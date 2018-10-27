@@ -10,8 +10,8 @@
 
 
 -- TODO:
--- suspend response should show month
 -- check for ruby pairity
+-- use phone number as ID
 -- improve cmd matching
 -- port 1877
 -- limit max suspension days
@@ -30,6 +30,7 @@
 -- only create gauth token when old one expires
 
 -- DONE:
+-- suspend response should show month
 -- default suspension days if no number specified
 -- "commands" (help) command
 -- test task for who will be msged by nagger
@@ -912,6 +913,12 @@ instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
 instance Pretty (DisplayTZ Date) where
   pretty d = pretty  (getWeekDay <$> d)
 
+instance Pretty (DisplayMonthDate (DisplayTZ (LocalTime Date))) where
+  pretty (DisplayMonthDate d) =
+    pretty (Concise $ dateMonth . HG.localTimeUnwrap <$> d)
+    <+> pretty (DisplayDate . dateDay . HG.localTimeUnwrap <$> d)
+
+
 instance Pretty (DisplayTZ (LocalTime Date)) where
   pretty = pretty . fmap HG.localTimeUnwrap
 
@@ -1187,16 +1194,16 @@ getCmd now d c (Just cm) | (Just period) <- isClaimShift d cm = ClaimShift c per
 
 getCmd now d c Nothing | ("shifts":_) <- Text.words . toLower . msgBody $ d = AvailableShifts
                        | Just (Just days) <- parseSuspendDays . toLower . msgBody $ d  = Suspend c days
-                       | Just Nothing <- parseSuspendDays . toLower . msgBody $ d  = Suspend c $ daysUntil now weekStart
+                       | Just Nothing <- parseSuspendDays . toLower . msgBody $ d  = Suspend c $ daysUntil localOffset now weekStart
                        | True <- parseHelp . toLower . msgBody $ d  = Help
                        | otherwise = UnrecognizedCmd d
 
-daysUntil :: InternTime -> WeekDay -> (Days Int)
-daysUntil now end =
-  Days $ daysUntilIter 0 (timeGetDate nowInLocal) end
+daysUntil :: TimezoneOffset -> InternTime -> WeekDay -> (Days Int)
+daysUntil tzo now end =
+  Days $ daysUntilIter 0 (timeGetDate nowInZone) end
   where
-    nowInLocal =
-      HG.localTimeSetTimezone localOffset . runIntern $ now
+    nowInZone =
+      HG.localTimeSetTimezone tzo . runIntern $ now
 
 daysUntilIter :: Int -> Date -> WeekDay -> Int
 daysUntilIter counter day end | (getWeekDay day) == end = counter
@@ -1226,16 +1233,20 @@ performCmd (ClaimShift contact period) = do
       liftIO $ print <$> postEvent (mkGCalEvent period (contactName contact))
       >> (pure $ destroyCookie $ twimlMsg $ "Shift claimed: " <> (fump $ internToLocal <$> period))
     _ ->
-      pure $ destroyCookie $ twimlMsg $ "That shift is no longer available. Try again. :("
+      pure $ destroyCookie $ twimlMsg $ "That shift is no longer available. :( Try again."
 
 performCmd (Suspend c d) = do
   today <- liftIO getToday
   let until = advanceDate d <$> today
+      msg = pretty ("Notifications silenced until: " :: Text)
+            <> (pretty . DisplayMonthDate . displayTZ localOffset $ until)
   liftIO $ suspendContact c $ getInternTime' until
-  pure $ destroyCookie $ twimlMsg $ dump $ pretty ("Notificaitons silenced until: " :: Text) <> (pretty . displayTZ localOffset $ until)
+  pure $ destroyCookie $ twimlMsg $ dump $ msg
 
 performCmd Help =
   pure $ destroyCookie $ twimlMsg $ dump $ pretty helpText
+
+newtype DisplayMonthDate a = DisplayMonthDate a
 
 suspendContact :: Contact -> InternTime -> IO ()
 suspendContact c t = do
