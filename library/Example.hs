@@ -299,7 +299,7 @@ newtype ISO8601 a = ISO8601 a deriving (Show, Eq)
 
 -- todo: refactor to use Period
 data GCalEvent a = GCalEvent
-  { gCalSummary :: Text
+  { gCalSummary :: Maybe Text
   , gCalDesc :: Maybe Text
   , gCalStart :: a
   , gCalEnd :: a
@@ -311,7 +311,7 @@ instance FromJSON (ISO8601 Text) where
 instance FromJSON (GCalEvent (ISO8601 Text)) where
   parseJSON = withObject "GCalEvent" $ \o ->
     GCalEvent
-      <$> o .: "summary"
+      <$> o .:? "summary"
       <*> o .:? "description"
       <*> o .: "start"
       <*> o .: "end"
@@ -347,7 +347,7 @@ instance ToJSON Contact where
 validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
 validateGCalEvent (GCalEvent smry dsc end st) =
   GCalEvent
-  <$> pure (toLower . strip $ smry)
+  <$> pure (toLower . strip <$> smry)
   <*> pure (toLower . strip <$> dsc)
   <*> (parse8601 end)
   <*> (parse8601 st)
@@ -511,20 +511,20 @@ newtype Gaps a = Gaps { runGaps :: a } deriving (Show, Eq, Functor)
 minGapDuration :: Minutes
 minGapDuration = 65
 
-getMinGapsInRange :: Minutes -> ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
-getMinGapsInRange minGap shifts range events =
-  filter greaterThanMin <$> getAllGapsInRange shifts range events
+getMinGapsInRange :: TimezoneOffset -> Minutes -> ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
+getMinGapsInRange tzo minGap shifts range events =
+  filter greaterThanMin <$> getAllGapsInRange tzo shifts range events
   where
     greaterThanMin = (>= minGap) . fst . periodDuration
 
 -- TODO: should daterange be a period?
-getAllGapsInRange :: ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
-getAllGapsInRange shifts (start, end) events =
+getAllGapsInRange :: TimezoneOffset -> ShiftWeekTime -> (StartTime, EndTime) -> [GCalEventI] -> Gaps [Period InternTime]
+getAllGapsInRange tzo shifts (start, end) events =
   Gaps $ concat $ fmap (uncurry dayGetGaps) shiftsAndEvents
   where
     shiftsAndEvents = pairShiftsAndEvents datedShifts datedEvents
-    datedShifts = shiftsInRange (start, end) shifts
-    datedEvents = Map.fromList $ groupByDate events
+    datedShifts = shiftsInRange tzo (start, end) shifts
+    datedEvents = Map.fromList $ groupByDate tzo events
 
 -- TODO: I can re-use this logic to figure out if a new event conflicts with
 -- existing ones (this should be then generalized)
@@ -542,8 +542,8 @@ type StartDate = Start Date
 type EndDate = End Date
 
 -- any shift that *starts* in range
-shiftsInRange :: (StartTime, EndTime) -> ShiftWeekTime -> [(Date, [PeriodIntern])]
-shiftsInRange (start, end) shifts = filter hasShifts allDatesInRange
+shiftsInRange :: TimezoneOffset -> (StartTime, EndTime) -> ShiftWeekTime -> [(Date, [PeriodIntern])]
+shiftsInRange tzo (start, end) shifts = filter hasShifts allDatesInRange
   where
     hasShifts :: (Date, [PeriodIntern]) -> Bool
     hasShifts = not . null . snd
@@ -561,7 +561,7 @@ shiftsInRange (start, end) shifts = filter hasShifts allDatesInRange
 
     shiftDates :: [Date]
     shiftDates =
-      uncurry datesFromTo (timeGetDate <$> start, timeGetDate <$> end)
+      uncurry datesFromTo (internToDate tzo <$> start, internToDate tzo <$> end)
 
     datesShifts :: ShiftWeekTime -> Date -> (Date, [PeriodIntern])
     datesShifts s date = (,) date
@@ -586,12 +586,12 @@ advanceDate (Days n) =
 nextDate :: Date -> Date
 nextDate = advanceDate . Days $ 1
 
-groupByDate :: [GCalEventI] -> [(Date, [GCalEventI])]
-groupByDate = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
+groupByDate :: TimezoneOffset -> [GCalEventI] -> [(Date, [GCalEventI])]
+groupByDate tzo = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
   where
     addDate :: [GCalEventI] -> (Date, [GCalEventI])
     addDate events = ((eventDate . head $ events), events)
-    eventDate = dtDate . timeGetDateTimeOfDay . gCalStart
+    eventDate = internToDate tzo . gCalStart
 
 periodTimeToElapsed :: Date -> Period ShiftTimeOfDay -> PeriodIntern
 periodTimeToElapsed date a =
@@ -698,6 +698,7 @@ prevWeekStart d
   | getWeekDay d == weekStart = d
   | otherwise = prevWeekStart $ advanceDate (Days (-1)) d
 
+-- TODO: fix issue with sending this late night
 emergencySMS :: IO ()
 emergencySMS = do
   today    <- getInternTime' <$> getToday
@@ -706,15 +707,16 @@ emergencySMS = do
   let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
       start = Start $ getInternTime' tomorrow
       end = End $ getInternTime' tomorrowEOD
+      tzo = localOffset
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   if not . null. runGaps $ gaps
     then let preMsg = "Shift not covered tomorrow!\n"
              msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
          in
-           (print $ "sending emergency alert to: " <> (pack . show $ contacts))
+           print ("sending emergency alert to: " <> (pack . show $ contacts))
            >> sendSmsTo contacts (pack . show $ preMsg <> msg)
     else print ("no gaps tomorrow" :: Text)
 
@@ -731,6 +733,7 @@ testNagAlert staffer = do
   today <- getToday
   let
     todayTZ = HG.localTimeGetTimezone today
+    tzo = localOffset
     (_, endDate) = weekOf $ HG.localTimeUnwrap today
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
     start = getInternTime' <$> Start today
@@ -740,7 +743,7 @@ testNagAlert staffer = do
   events <- validateGCalEvent' `traverse` rawEvents
   if stafferOnCal staffer events
     then print ("What a responsible bastard!" :: Text)
-    else let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+    else let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
              gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
          in print $ "couldn't find " <> staffer <> pack " on cal\n" <> gapMsg
 
@@ -750,6 +753,7 @@ nagAlert = do
   print "Nagger notifications starting"
   today <- getToday
   let
+    tzo = localOffset
     todayTZ = HG.localTimeGetTimezone today
     (_, endDate) = weekOf $ HG.localTimeUnwrap today
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
@@ -760,7 +764,7 @@ nagAlert = do
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   contacts <- onlyActive currentDayIntern <$> loadContacts
-  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
       toNag = whomToNag events contacts
   if null . runGaps $ gaps
     then pure () -- send no alerts if there are no gaps
@@ -779,7 +783,7 @@ whomToNag :: [GCalEventI] -> [Active Contact] -> [Active Contact]
 whomToNag es = filter $ not . flip stafferOnCal es . contactName . runActive
 
 stafferOnCal :: Foldable f => Text -> f (GCalEvent a) -> Bool
-stafferOnCal staffer = any (hasName . gCalSummary)
+stafferOnCal staffer = any (maybe False hasName . gCalSummary)
   where
     hasName = contains $ nameParser staffer
 
@@ -791,19 +795,17 @@ gapsThisWeekAlert = do
   today <- getToday
   contacts <- onlyActive (getInternTime' today) <$> loadContacts
   let
-    todayTZ = HG.localTimeGetTimezone today
+    tzo = localOffset -- TODO: push tzo into state monad
+    todayTZ = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
     (_, endDate) = weekOf $ HG.localTimeUnwrap today
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
     start = getInternTime' <$> Start today
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  print $ "TODAY: " <> show today <> "\n"
-  print $ "END OF WEEK: " <> show endDate <> "\n"
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
-  print $ "GAPS: " <> show gaps
-  sendSmsTo contacts $ fump $ (fmap . fmap . fmap) internToLocal gaps
+  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
+  sendSmsTo contacts $ ("Weekly Schedule Notice:\n" <>)$ fump $ (fmap . fmap . fmap) internToLocal gaps
 
 -- TODO: rename
 dump = renderStrict . layoutPretty defaultLayoutOptions
@@ -822,27 +824,29 @@ displayGaps = fump
 
 testGapAlert :: Int -> Int -> IO ()
 testGapAlert from to = do
-  let startDate = DateTime (Date { dateDay = from, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 0 0 0 0
+  let tzo = localOffset
+      startDate = DateTime (Date { dateDay = from, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 0 0 0 0
       endDate = DateTime (Date { dateDay = to, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 23 58 58 0
       start = Start $ internTimeFromLocalOffset startDate
       end = End $ internTimeFromLocalOffset endDate
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getAllGapsInRange sched (start, end) events
+  let gaps = getAllGapsInRange tzo sched (start, end) events
   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
 
 -- TODO: extract and test more of this logic
 testGapsTomorrowAlert :: IO ()
 testGapsTomorrowAlert = do
   tomorrow <- getTomorrow
-  let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
+  let tzo = localOffset
+      tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
       start = Start $ getInternTime' tomorrow
       end = End $ getInternTime' tomorrowEOD
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getMinGapsInRange minGapDuration sched (start, end) events
+  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
 
 -- this should eventually be in a state monad
@@ -899,15 +903,14 @@ instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle
 
 -- TODO: number these responses
 instance (Pretty a) => Pretty (Gaps [a]) where
-  pretty (Gaps []) = "No gaps found this week!"
+  pretty (Gaps []) = "All shifts covered this week!"
   pretty (Gaps a) = vsep $ ["Open shifts: "]
                             <> fmap pretty a
                             <> ["Respond with \"shifts\" to claim one right now"]
 
-
 instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
-  pretty (Period s _ (Just name)) = pretty (timeGetDate <$> s) <+> pretty name
-  pretty (Period s e Nothing)     = pretty (timeGetDate <$> s) <+> pretty s
+  pretty (Period s _ (Just name)) = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty name
+  pretty (Period s e Nothing)     = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty s
                                     <+> "to" <+> pretty e
 
 instance Pretty (DisplayTZ Date) where
@@ -1024,17 +1027,29 @@ show8601UTC =  show8601 utcOffset
 show8601Local :: InternTime -> Text
 show8601Local = show8601 localOffset
 
-instance Timeable (LocalTime HG.Elapsed) where
-  timeGetElapsedP = HG.localTimeToGlobal . (flip HG.ElapsedP 0 <$>)
+internToDateTime :: TimezoneOffset -> InternTime -> DateTime
+internToDateTime tzo = timeGetDateTimeOfDay . HG.localTimeUnwrap . HG.localTimeSetTimezone tzo . runIntern
 
-instance Timeable InternTime where
-  timeGetElapsedP = HG.timeGetElapsedP . runIntern
+internToDate :: TimezoneOffset -> InternTime -> Date
+internToDate tzo = dtDate . internToDateTime tzo
+
+-- these are making timeGetTimeOfDay always evaulate in UTC, which is misleading
+-- instance Timeable (LocalTime HG.Elapsed) where
+--   timeGetElapsedP = HG.localTimeToGlobal . (flip HG.ElapsedP 0 <$>)
+
+-- instance Timeable InternTime where
+--   timeGetElapsedP = HG.timeGetElapsedP . runIntern
 
 periodDuration :: PeriodIntern -> (Minutes, HG.Seconds)
-periodDuration a = fromSeconds $ timeDiff (periodEnd a) (periodStart a)
+periodDuration a = fromSeconds $ timeDiff (inUTC . periodEnd $ a) (inUTC . periodStart $ a)
+  where
+    inUTC = HG.localTimeUnwrap . runIntern
 
 eventDuration :: GCalEventI -> (Minutes, HG.Seconds)
-eventDuration a = fromSeconds $ timeDiff (gCalEnd a) (gCalStart a)
+eventDuration a = fromSeconds $ timeDiff (inUTC . gCalEnd $ a) (inUTC . gCalStart $ a)
+    where
+    inUTC = HG.localTimeUnwrap . runIntern
+
 
 totalDuration :: Foldable f => f GCalEventI -> (Minutes, HG.Seconds)
 totalDuration = foldr sumMS (0,0)
@@ -1053,7 +1068,7 @@ eventBySummDuration  =
     bySummary e  =
       Map.insertWith
       sumMS
-      (toLower . strip . gCalSummary $ e)
+      (maybe " " (toLower . strip) . gCalSummary $ e)
       $ eventDuration e
 
     reshapeTime :: (Text, (Minutes, HG.Seconds)) -> (Text, Hours, Minutes)
@@ -1200,22 +1215,23 @@ getCmd now d c Nothing | ("shifts":_) <- Text.words . toLower . msgBody $ d = Av
 
 daysUntil :: TimezoneOffset -> InternTime -> WeekDay -> (Days Int)
 daysUntil tzo now end =
-  Days $ daysUntilIter 0 (timeGetDate nowInZone) end
+  Days $ daysUntilIter 0 dateInZone end
   where
-    nowInZone =
-      HG.localTimeSetTimezone tzo . runIntern $ now
+    dateInZone =
+      timeGetDate . HG.localTimeUnwrap . HG.localTimeSetTimezone tzo . runIntern $ now
 
 daysUntilIter :: Int -> Date -> WeekDay -> Int
 daysUntilIter counter day end | (getWeekDay day) == end = counter
                               | otherwise = daysUntilIter (counter + 1) (nextDate day) end
 
-performCmd :: Cmd -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse) --Handler TwilioMsgResponse
+performCmd :: Cmd -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
 
 performCmd (UnrecognizedCmd d) =
   pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
 
 performCmd AvailableShifts = do
   gaps <- indexGaps <$> (liftIO . gapsNowTo . Days $ 7)
+  liftIO $ print $ "GAPGS: gaps"
   let preMsg = "Open shifts this week.\nRespond with the number to claim it.\n"
   pure
     $ addAvailableshiftsCookie
@@ -1262,7 +1278,7 @@ writeContacts cs = flip encodeFile cs . (<> "/contacts.yml") =<< configDir
 newtype Days a = Days a deriving (Show, Eq)
 
 mkGCalEvent :: PeriodIntern -> Text -> GCalEventI
-mkGCalEvent p summ = GCalEvent summ botText (periodStart p) (periodEnd p)
+mkGCalEvent p summ = GCalEvent (Just summ) botText (periodStart p) (periodEnd p)
   where
     botText = Just "Event created by shift bot."
 
@@ -1345,30 +1361,15 @@ gapsNowTo :: Days Int -> IO (Gaps [Period InternTime])
 gapsNowTo d = do
   today <- getToday
   let
+    tzo = localOffset
     endDateEOD = (fmap.fmap) (advanceDate d) $ End today
     start = getInternTime' <$> Start today
     end = getInternTime' <$> endDateEOD
   sched <- loadShifts
   rawEvents <- getEvents (start, end)
+  liftIO $ print $ "\nRAW: " <> show rawEvents
   events <- validateGCalEvent' `traverse` rawEvents
-  pure $ getMinGapsInRange minGapDuration sched (start, end) events
-
--- thisWeekGapsText :: IO Text
--- thisWeekGapsText = do
---   today <- getToday
---   let
---     todayTZ = HG.localTimeGetTimezone today
---     (_, endDate) = weekOf $ HG.localTimeUnwrap today
---     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
---     start = getInternTime' <$> Start today
---     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
---   sched <- loadShifts
---   rawEvents <- getEvents (start, end)
---   events <- validateGCalEvent' `traverse` rawEvents
---   let gaps = getMinGapsInRange minGapDuration sched (start, end) events
---       dGaps = (fmap . fmap . fmap) internToLocal gaps
--- --  print . toJSON . indexGaps $ dGaps
---   pure . renderStrict . layoutPretty defaultLayoutOptions . pretty $ indexGaps dGaps
+  pure $ getMinGapsInRange tzo minGapDuration sched (start, end) events
 
 helpText :: Text
 helpText = [r|

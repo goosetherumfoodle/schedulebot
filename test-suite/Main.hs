@@ -46,7 +46,7 @@ spec = parallel $ do
                  \\"start\": {\"dateTime\": \"start datetime\"}, \
                  \\"end\": {\"dateTime\": \"end datetime\"}}"
           expected = GCalEvent {
-              gCalSummary = "this is the summary"
+              gCalSummary = Just "this is the summary"
             , gCalDesc = Just "good description"
             , gCalStart = ISO8601 ("start datetime" :: Text)
             , gCalEnd = ISO8601 ("end datetime" :: Text)
@@ -150,13 +150,13 @@ sunday:
           p2End = internTimeFromLocalOffset $ DateTime firstDay fourthTime
           p3Start = internTimeFromLocalOffset $ DateTime secondDay firstTime
           p3End = internTimeFromLocalOffset $ DateTime secondDay secondTime
-          e1 = GCalEvent "first event" Nothing p1Start p1End
-          e2 = GCalEvent "second event" Nothing p2Start p2End
-          e3 = GCalEvent "third event" Nothing p3Start p3End
+          e1 = GCalEvent (Just "first event") Nothing p1Start p1End
+          e2 = GCalEvent (Just "second event") Nothing p2Start p2End
+          e3 = GCalEvent (Just "third event") Nothing p3Start p3End
 
-      groupByDate [e1, e2, e3] `shouldBe` [ (firstDay, [e1, e2])
-                                          , (secondDay, [e3])
-                                          ]
+      groupByDate localOffset [e1, e2, e3] `shouldBe` [ (firstDay, [e1, e2])
+                                                      , (secondDay, [e3])
+                                                      ]
 
   describe "shrinkGap" $ do
     context "with a pior partially overlapping gap" $ do
@@ -167,7 +167,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 30 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
             expectedGap = Period gapStart eventStart Nothing
 
@@ -181,7 +181,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 0 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
             expectedGap = Period eventEnd gapEnd Nothing
 
@@ -196,7 +196,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 13 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 15 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` PriorGap
 
@@ -208,7 +208,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 0 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` PostGap
 
@@ -220,7 +220,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` SubsetGap
 
@@ -232,7 +232,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` SubsetGap
 
@@ -244,7 +244,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` StrictSupersetGap
 
@@ -257,7 +257,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
@@ -270,7 +270,7 @@ sunday:
 
             eventStart = internTimeFromLocalOffset $ DateTime baseDate $ TimeOfDay 12 0 0 0
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate $ TimeOfDay 16 0 0 0
-            event = GCalEvent {gCalSummary = "event 2", gCalDesc = Nothing, gCalStart = eventStart, gCalEnd = eventEnd}
+            event = GCalEvent {gCalSummary = (Just "event 2"), gCalDesc = Nothing, gCalStart = eventStart, gCalEnd = eventEnd}
 
         gapRel gap event `shouldBe` IntersectGap
 
@@ -282,7 +282,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
@@ -294,7 +294,7 @@ sunday:
             gap = Period gapStart gapEnd Nothing
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
@@ -306,7 +306,7 @@ sunday:
           gap = Period gapStart gapEnd Nothing
           eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
           eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
-          event = GCalEvent "event" Nothing eventStart eventEnd
+          event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
           expectedFirst = Period gapStart eventStart Nothing
           expectedSecond = Period eventEnd gapEnd Nothing
@@ -326,7 +326,7 @@ sunday:
 
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1, gap2]
 
@@ -342,7 +342,7 @@ sunday:
 
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 14 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1]
 
@@ -360,7 +360,7 @@ sunday:
 
             eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 20 0 0)
             eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 13 0 0 0)
-            event = GCalEvent "event" Nothing eventStart eventEnd
+            event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1, Period gap2Start eventStart Nothing]
 
@@ -389,11 +389,11 @@ sunday:
 
             event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
             event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-            event1 = GCalEvent "event 1" Nothing event1Start event1End
+            event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
             event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
             event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
-            event2 = GCalEvent "event 2" Nothing event2Start event2End
+            event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
             events = [event1, event2]
 
@@ -405,7 +405,7 @@ sunday:
                         , End . internTimeFromLocalOffset . eod $ sunday
                         )
 
-            results = getAllGapsInRange shifts dateRange events
+            results = getAllGapsInRange localOffset shifts dateRange events
 
         results `shouldBe` Gaps [expectedGap]
 
@@ -441,11 +441,11 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event1 = GCalEvent "event 1" Nothing event1Start event1End
+          event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
           event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
           event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
-          event2 = GCalEvent "event 2" Nothing event2Start event2End
+          event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
           sundayEvents = [event1, event2]
 
@@ -457,11 +457,11 @@ sunday:
 
           event3Start = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 10 30 0 0)
           event3End = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 12 0 0 0)
-          event3 = GCalEvent "event 3" Nothing event3Start event3End
+          event3 = GCalEvent (Just "event 3") Nothing event3Start event3End
 
           event4Start = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 12 0 0 0)
           event4End = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 14 0 0 0)
-          event4 = GCalEvent "event 4" Nothing event4Start event4End
+          event4 = GCalEvent (Just "event 4") Nothing event4Start event4End
 
           fridayEvents = [event3, event4]
 
@@ -473,7 +473,7 @@ sunday:
                       , End . internTimeFromLocalOffset . eod $ sunday
                       )
 
-          results = getAllGapsInRange shifts dateRange (fridayEvents ++ sundayEvents)
+          results = getAllGapsInRange localOffset shifts dateRange (fridayEvents ++ sundayEvents)
 
         results `shouldBe` Gaps [expectedGap1, expectedGap2]
 
@@ -502,11 +502,11 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event1 = GCalEvent "event 1" Nothing event1Start event1End
+          event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
           event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
           event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
-          event2 = GCalEvent "event 2" Nothing event2Start event2End
+          event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
           sundayEvents = [event1, event2]
           dateRange = (
@@ -514,7 +514,7 @@ sunday:
             , End . internTimeFromLocalOffset $  Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
             )
 
-          results = getAllGapsInRange shifts dateRange sundayEvents
+          results = getAllGapsInRange localOffset shifts dateRange sundayEvents
 
         results `shouldBe` Gaps []
 
@@ -536,7 +536,7 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event1 = GCalEvent "event 1" Nothing event1Start event1End
+          event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
           sundayEvents = [ event1 ]
 
@@ -544,7 +544,7 @@ sunday:
               Start . internTimeFromLocalOffset $ Date { dateDay = 01, dateMonth = March, dateYear = 2018 }
             , End . internTimeFromLocalOffset $ Date { dateDay = 10, dateMonth = March, dateYear = 2018 }
                       )
-          results = getAllGapsInRange shifts dateRange sundayEvents
+          results = getAllGapsInRange localOffset shifts dateRange sundayEvents
 
         results `shouldBe` Gaps []
 
@@ -578,7 +578,7 @@ sunday:
 
           dateRange = (start, end)
 
-          results = getAllGapsInRange  shifts dateRange []
+          results = getAllGapsInRange localOffset shifts dateRange []
 
         results `shouldBe` Gaps [expectedGap]
 
@@ -624,7 +624,7 @@ sunday:
 
           minMinutes = 60
 
-          results = getMinGapsInRange minMinutes shifts dateRange []
+          results = getMinGapsInRange localOffset minMinutes shifts dateRange []
 
         results `shouldBe` Gaps [expectedGap2]
 
@@ -680,7 +680,7 @@ sunday:
                            , (tuesday, [intoIntern tuesday secondExpected])
                            ]
 
-      shiftsInRange (start, end) shifts `shouldBe` expectedShifts
+      shiftsInRange localOffset (start, end) shifts `shouldBe` expectedShifts
 
 
   describe "eventDuration" $ do
@@ -689,7 +689,7 @@ sunday:
         sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
         eventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
         eventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-        event = GCalEvent "event" Nothing eventStart eventEnd
+        event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
 
       eventDuration event `shouldBe` (Minutes $ (2 * 60) + 30, Seconds 0)
@@ -700,11 +700,11 @@ sunday:
         sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
         event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
         event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-        event1 = GCalEvent "event1" Nothing event1Start event1End
+        event1 = GCalEvent (Just "event1") Nothing event1Start event1End
 
         event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
         event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
-        event2 = GCalEvent "event2" Nothing event2Start event2End
+        event2 = GCalEvent (Just "event2") Nothing event2Start event2End
 
 
       totalDuration [event1, event2] `shouldBe` (Minutes $ (4 * 60) + 30, Seconds 0)
@@ -716,15 +716,15 @@ sunday:
 
         xEvent1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
         xEvent1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-        xEvent1 = GCalEvent "x" Nothing xEvent1Start xEvent1End
+        xEvent1 = GCalEvent (Just "x") Nothing xEvent1Start xEvent1End
 
         yEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
         yEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 45 0 0)
-        yEvent = GCalEvent "y" Nothing yEventStart yEventEnd
+        yEvent = GCalEvent (Just "y") Nothing yEventStart yEventEnd
 
         xEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
         xEvent2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-        xEvent2 = GCalEvent " X  " Nothing xEvent2Start xEvent2End
+        xEvent2 = GCalEvent (Just " X  ") Nothing xEvent2Start xEvent2End
 
         expected = [ ("x", Hours 5, Minutes 0)
                    , ("y", Hours 2, Minutes 15)
@@ -752,11 +752,11 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event1 = GCalEvent "suze c" Nothing event1Start event1End
+          event1 = GCalEvent (Just "suze c") Nothing event1Start event1End
 
           event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
           event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
-          event2 = GCalEvent "well suZe z has fun!" Nothing event2Start event2End
+          event2 = GCalEvent (Just "well suZe z has fun!") Nothing event2Start event2End
 
         stafferOnCal name [event1, event2] `shouldBe` True
 
@@ -769,11 +769,11 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event1 = GCalEvent "suze c" Nothing event1Start event1End
+          event1 = GCalEvent (Just "suze c") Nothing event1Start event1End
 
           event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
           event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
-          event2 = GCalEvent "well suZe k has fun!" Nothing event2Start event2End
+          event2 = GCalEvent (Just "well suZe k has fun!") Nothing event2Start event2End
 
         stafferOnCal name [event1, event2] `shouldBe` False
 
@@ -784,15 +784,15 @@ sunday:
 
             prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
             prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-            prevEvent = GCalEvent "" Nothing prevEventStart prevEventEnd
+            prevEvent = GCalEvent (Just "") Nothing prevEventStart prevEventEnd
 
             prevEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
             prevEvent2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
-            prevEvent2 = GCalEvent "" Nothing prevEvent2Start prevEvent2End
+            prevEvent2 = GCalEvent (Just "") Nothing prevEvent2Start prevEvent2End
 
             newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
             newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
-            newEvent = GCalEvent "" Nothing newEventStart newEventEnd
+            newEvent = GCalEvent (Just "") Nothing newEventStart newEventEnd
 
         hasOverlap [prevEvent, prevEvent2] newEvent `shouldBe` True
 
@@ -802,11 +802,11 @@ sunday:
 
             prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
             prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-            prevEvent = GCalEvent "" Nothing prevEventStart prevEventEnd
+            prevEvent = GCalEvent (Just "") Nothing prevEventStart prevEventEnd
 
             newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
             newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
-            newEvent = GCalEvent "" Nothing newEventStart newEventEnd
+            newEvent = GCalEvent (Just "") Nothing newEventStart newEventEnd
 
         hasOverlap [prevEvent] newEvent `shouldBe` False
 
@@ -864,11 +864,11 @@ sunday:
 
           event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
           event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
-          event1 = GCalEvent "Jeffers" Nothing event1Start event1End
+          event1 = GCalEvent (Just "Jeffers") Nothing event1Start event1End
 
           event2Start = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 15 30 0 0)
           event2End = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 18 00 0 0)
-          event2 = GCalEvent "  beLINda " Nothing event2Start event2End
+          event2 = GCalEvent (Just "  beLINda ") Nothing event2Start event2End
 
           onSched = Active $ Contact "Belinda" "156131" Nothing 1
           unScheduled = Active $ Contact "Big Suze" "156131" Nothing 8
