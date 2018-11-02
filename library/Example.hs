@@ -1050,7 +1050,6 @@ instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle
     where
       prettyIx (i, p) = pretty i <> ":" <+> pretty p
 
--- TODO: number these responses
 instance (Pretty a) => Pretty (Gaps [a]) where
   pretty (Gaps []) = "All shifts covered this week!"
   pretty (Gaps a) = vsep $ ["Open shifts: "]
@@ -1090,12 +1089,6 @@ instance Pretty (DisplayTZ (LocalTime HG.Elapsed)) where
     pretty $ DisplayTZ $ toTime e
     where
       toTime = dtTime . HG.timeGetDateTimeOfDay . HG.localTimeUnwrap
-
-  -- TODO: open Hourglass issue for broken version:
-  -- in compiled code (not in the repl), `timeGetDateTimeOfDay` always returns
-  -- zero'd time
-        -- toTime !x = HG.timeGetDateTimeOfDay . HG.localTimeUnwrap $ x
-
 
   -- TODO: clean up
 instance Pretty (DisplayTZ TimeOfDay) where
