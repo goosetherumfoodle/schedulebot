@@ -843,9 +843,10 @@ nagAlert = do
   let
     tzo = localOffset
     todayTZ = HG.localTimeGetTimezone today
-    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    (startDate, endDate) = weekOf $ HG.localTimeUnwrap today
+    startDateBOD = flip DateTime (TimeOfDay 0 0 0 0) <$> startDate
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
+    start = getInternTime' <$> HG.localTime todayTZ <$> startDateBOD
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
     currentDayIntern = getInternTime' today
   sched <- loadShifts
