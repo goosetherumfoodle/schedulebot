@@ -97,6 +97,20 @@ executables:
     - -threaded
     - -with-rtsopts=-N
 
+  alert-annex-emergency:
+    source-dirs: executable
+    main: Alert/AnnexEmergency.hs
+    dependencies:
+    - base
+    - scheduler-fp
+    ghc-options:
+    - -main-is Alert.AnnexEmergency
+    - -split-objs
+    - -O2
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+
   alert-week:
     source-dirs: executable
     main: Alert/Week.hs
@@ -105,6 +119,20 @@ executables:
     - scheduler-fp
     ghc-options:
     - -main-is Alert.Week
+    - -split-objs
+    - -O2
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+
+  alert-annex-week:
+    source-dirs: executable
+    main: Alert/AnnexWeek.hs
+    dependencies:
+    - base
+    - scheduler-fp
+    ghc-options:
+    - -main-is Alert.AnnexWeek
     - -split-objs
     - -O2
     - -rtsopts
@@ -130,6 +158,7 @@ tests:
     main: Main.hs
     dependencies:
     - base
+    - containers
     - scheduler-fp
     - tasty
     - tasty-hspec

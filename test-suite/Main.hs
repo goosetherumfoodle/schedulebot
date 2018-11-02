@@ -9,6 +9,7 @@ import Data.Yaml.Internal (ParseException)
 import Text.RawString.QQ (r)
 import Data.Hourglass hiding (Period)
 import Data.Text (Text)
+import qualified Data.Set as Set
 
 import Example
 
@@ -135,6 +136,28 @@ sunday:
           decoded = decodeEither' input :: Either ParseException (ShiftWeek RawShiftTime)
 
       decoded `shouldBe` expected
+
+    describe "[Contact]" $ do
+      it "parses contacts" $ do
+        let input = [r|
+- suspendUntil: Null
+  name: Mark Corrigan
+  id: 2
+  number: '+1231231234'
+  roles: ['weekly', 'annex']
+
+- name: Big Suze
+  id: 3
+  number: '+13213214321'
+  suspendUntil: Null
+  roles: []
+|]
+            contacts = [
+              Contact "Mark Corrigan" "+1231231234" Nothing 2 (Set.fromList [WeeklyRole, AnnexRole])
+              , Contact "Big Suze" "+13213214321" Nothing 3 Set.empty
+              ]
+
+        decodeEither' input `shouldBe` Right contacts
 
   describe "groupByDate" $ do
     it "groups events by day" $ do
@@ -691,7 +714,6 @@ sunday:
         eventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
         event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
-
       eventDuration event `shouldBe` (Minutes $ (2 * 60) + 30, Seconds 0)
 
   describe "totalDuration" $ do
@@ -705,7 +727,6 @@ sunday:
         event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
         event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
         event2 = GCalEvent (Just "event2") Nothing event2Start event2End
-
 
       totalDuration [event1, event2] `shouldBe` (Minutes $ (4 * 60) + 30, Seconds 0)
 
@@ -819,12 +840,11 @@ sunday:
           future = getInternTime utcOffset $ advanceDate (Days 3) nowDate
           now = getInternTime utcOffset $ nowDate
 
-          active1 = Contact "Jez" "1561351" Nothing 1
-          active2 = Contact "Big Suze" "156131" (Just past) 2
-          inactive = Contact "Mark" "8946531" (Just future) 3
+          active1 = Contact "Jez" "1561351" Nothing 1 Set.empty
+          active2 = Contact "Big Suze" "156131" (Just past) 2 Set.empty
+          inactive = Contact "Mark" "8946531" (Just future) 3 Set.empty
 
         onlyActive now [active1, inactive, active2] `shouldBe` [Active active1, Active active2]
-
 
     context "with only inactive contacts" $ do
       it "is empty" $ do
@@ -834,8 +854,8 @@ sunday:
           distantFuture = getInternTime utcOffset $ advanceDate (Days 30) nowDate
           now = getInternTime utcOffset $ nowDate
 
-          inactive1 = Contact "Big Suze" "156131" (Just future) 2
-          inactive2 = Contact "Mark" "8946531" (Just distantFuture) 3
+          inactive1 = Contact "Big Suze" "156131" (Just future) 2 Set.empty
+          inactive2 = Contact "Mark" "8946531" (Just distantFuture) 3 Set.empty
 
         onlyActive now [inactive1, inactive2] `shouldBe` []
 
@@ -854,7 +874,6 @@ sunday:
                       ]
 
           expectedOutput = "Open shifts: \n[Sun 4 6AM to 11:15PM\n, Mon 5 12:50PM to 6:15PM]\nRespond with \"shifts\" to claim one right now"
-
       displayGaps gaps `shouldBe` expectedOutput
 
   describe "selecting which staffers to nag" $ do
@@ -870,8 +889,8 @@ sunday:
           event2End = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 18 00 0 0)
           event2 = GCalEvent (Just "  beLINda ") Nothing event2Start event2End
 
-          onSched = Active $ Contact "Belinda" "156131" Nothing 1
-          unScheduled = Active $ Contact "Big Suze" "156131" Nothing 8
+          onSched = Active $ Contact "Belinda" "156131" Nothing 1 Set.empty
+          unScheduled = Active $ Contact "Big Suze" "156131" Nothing 8 Set.empty
 
       whomToNag [event1, event2] [onSched, unScheduled] `shouldBe` [unScheduled]
 

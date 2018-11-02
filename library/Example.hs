@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
@@ -11,8 +12,13 @@
 
 -- TODO:
 -- check for ruby pairity
+-- show annex event names in alerts
+-- claiming annex shifts
+-- figure out how to handle suspensions for both locations
 -- use phone number as ID
 -- improve cmd matching
+-- improve handling for all-day events (recognize and toss)
+-- handle DST
 -- port 1877
 -- limit max suspension days
 -- task for verifying env vars and config files
@@ -30,6 +36,9 @@
 -- only create gauth token when old one expires
 
 -- DONE:
+-- write alerts for annex location
+-- user roles
+-- alert messages filter by corresponding roles
 -- suspend response should show month
 -- default suspension days if no number specified
 -- "commands" (help) command
@@ -61,6 +70,9 @@ module Example where
 
 import Prelude hiding (until)
 
+import Data.Foldable (asum)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Text.RawString.QQ (r)
 import Data.List (foldl', find)
 import qualified Network.URI.Encode as URI
@@ -142,6 +154,7 @@ import Network.Wreq ( FormParam(..)
 import Data.Aeson (FromJSON(..)
                   , ToJSON(..)
                   , Result(..)
+                  , Value(..)
                   , fromJSON
                   , withObject
                   , withText
@@ -178,8 +191,12 @@ data Contact = Contact { contactName :: Text
                        , contactNumber :: Text
                        , contactSuspendUntil :: Maybe InternTime
                        , contactId :: Int
+                       , contactRoles :: Set ContactRole
                        }
   deriving (Show, Eq)
+
+data ContactRole = WeeklyRole | AnnexRole
+  deriving (Show, Eq, Ord)
 
 newtype JWTException = JWTException String
 
@@ -240,7 +257,7 @@ instance Show GAuthTokenException where
 -- todo: lenses
 unwrapEvents :: Maybe (Result [Maybe RawGCalEvent]) -> IO [Maybe RawGCalEvent]
 unwrapEvents (Just (Success events)) = pure events
-unwrapEvents _ = throwIO ResponseErrorGCalEvents
+unwrapEvents err = throwIO $ ResponseErrorGCalEvents $ show err
 
 localOffset :: TimezoneOffset
 localOffset = TimezoneOffset (-240)
@@ -251,14 +268,15 @@ type EndTime = End InternTime
 newtype Start a = Start { runStart :: a } deriving (Functor, Show, Eq)
 newtype End a = End { runEnd :: a } deriving (Functor, Show, Eq)
 
+newtype CalId a = CalId a
+
 -- TODO: deal with paginated results (`nextPageToken`)
 -- if we don't have the "singleEvents" query param set, then we might get
 -- recurring dates before the earliest date we request
-getEvents :: (StartTime, EndTime) -> IO [RawGCalEvent]
-getEvents ((Start start), (End end)) = do
+getEventsForCal :: CalId String -> (StartTime, EndTime) -> IO [RawGCalEvent]
+getEventsForCal (CalId cid) ((Start start), (End end)) = do
   let (fmtMin, fmtMax) = (show8601UTC start, show8601UTC end)
   loadEnv
-  calId <- getEnv "GCAL_ID"
   token <- getAuthToken =<< googleJWT
   let reqOpts = defaults
              & auth ?~ oauth2Bearer token
@@ -267,7 +285,7 @@ getEvents ((Start start), (End end)) = do
              & param "timeMin" .~ [fmtMin]
              & param "timeMax" .~ [fmtMax]
              & param "maxResults" .~ ["2500"]
-  resp <- getWith reqOpts $ url calId
+  resp <- getWith reqOpts $ url cid
   let mEvents = fromJSON <$> preview (responseBody . key "items") resp
   catMaybes <$> (unwrapEvents mEvents)
   where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
@@ -284,13 +302,13 @@ postEvent e = do
           <> calID
           <> "/events"
 
-data ResponseErrorGCalEvents = ResponseErrorGCalEvents
+data ResponseErrorGCalEvents = ResponseErrorGCalEvents String
 
 instance Exception ResponseErrorGCalEvents
 
 instance Show ResponseErrorGCalEvents where
-  show ResponseErrorGCalEvents =
-    "Error: No events found in google calendar response body"
+  show (ResponseErrorGCalEvents a) =
+    "Error: in google calandar response: " <> show a
 
 type RawGCalEvent = GCalEvent (ISO8601 Text)
 type GCalEventI = GCalEvent InternTime
@@ -305,10 +323,19 @@ data GCalEvent a = GCalEvent
   , gCalEnd :: a
   } deriving (Show, Eq, Functor)
 
+-- TODO: Use timezone from cal to finish date?
+-- or GADT to construct different type depending on date or datetime presence?
+-- (can GADTs be used to parse (GCalEvent (ISO8601 Text)) OR (GCalEvent Date)?
 instance FromJSON (ISO8601 Text) where
-  parseJSON = withObject "GCalDateTime" $ \v -> ISO8601 <$> v .: "dateTime"
+  parseJSON = withObject "GCalDateTime" $ \v -> do
+     dt <- v .:? "dateTime"
+-- this is a hack to avoid solving the issue of how to handle parsing all-day events
+     d <- (fmap.fmap) (<> "T00:00:00Z") (v .:? "date")
+     case asum [dt, d] of
+       Just date -> pure $ ISO8601 date
+       Nothing -> fail "couldn't find \"dateTime\" or \"date\" in google calendar event"
 
-instance FromJSON (GCalEvent (ISO8601 Text)) where
+instance FromJSON a => FromJSON (GCalEvent a) where
   parseJSON = withObject "GCalEvent" $ \o ->
     GCalEvent
       <$> o .:? "summary"
@@ -332,17 +359,35 @@ instance FromJSON Contact where
     <*> o .: "number"
     <*> o .: "suspendUntil"
     <*> o .: "id"
+    <*> o .: "roles"
 
 instance ToJSON Contact where
-  toJSON (Contact name number susp cid) = object [
+  toJSON (Contact name number susp cid roles) = object [
       "name"   .= name
     , "number" .= number
     , "suspendUntil" .= susp
     , "id" .= cid
+    , "roles" .= roles
     ]
 
-  toEncoding (Contact name number susp cid) =
-    pairs ("name" .= name <> "number" .= number <> "suspendUntil" .= susp <> "id" .= cid)
+  toEncoding (Contact name number susp cid roles) =
+    pairs ("name" .= name
+           <> "number" .= number
+           <> "suspendUntil" .= susp
+           <> "id" .= cid
+           <> "roles" .= roles
+          )
+
+instance FromJSON ContactRole where
+  parseJSON = withText "ContactRole" $ \t ->
+    case t of
+      "weekly" -> pure WeeklyRole
+      "annex" -> pure AnnexRole
+      _ -> fail "expecting a valid contact role"
+
+instance ToJSON ContactRole where
+  toJSON WeeklyRole = String "weekly"
+  toJSON AnnexRole = String "annex"
 
 validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
 validateGCalEvent (GCalEvent smry dsc end st) =
@@ -526,8 +571,21 @@ getAllGapsInRange tzo shifts (start, end) events =
     datedShifts = shiftsInRange tzo (start, end) shifts
     datedEvents = Map.fromList $ groupByDate tzo events
 
--- TODO: I can re-use this logic to figure out if a new event conflicts with
--- existing ones (this should be then generalized)
+newtype Covered a = Covered { runCovered :: a } deriving (Functor, Foldable, Traversable, Show)
+newtype StoreEvent a = StoreEvent { runStoreEvent :: a } deriving (Functor, Foldable, Traversable, Show)
+
+-- TODO: should daterange be a period?
+-- TODO: do we need tzo here? (It seems not as we're comparing intern to intern?)
+getAllGapsAllDay :: TimezoneOffset -> [Covered GCalEventI] -> [StoreEvent GCalEventI] -> Gaps [Period InternTime]
+getAllGapsAllDay tzo coverage events =
+  Gaps $ dayGetGaps storeEvents coveragePeriods
+  where
+    storeEvents = periodize . runStoreEvent <$> events
+    coveragePeriods = runCovered <$> coverage
+
+-- TODO: Generalize this logic, as we're now using it in more places than just
+-- shifts (from a schedule) and events (meaning covered shifts)
+-- maybe use some newtypes related to openings and coverage
 dayGetGaps :: [Period InternTime] -> [GCalEventI] -> [Period InternTime]
 dayGetGaps shifts events = foldr alterGaps shifts events
 
@@ -653,6 +711,11 @@ pickShiftSelector Sunday = wkSun
 -- ensure we don't message inactive contacts
 newtype Active a = Active { runActive :: a } deriving (Show, Eq)
 
+sendSmsToRole :: ContactRole -> [Active Contact] -> Text -> IO ()
+sendSmsToRole role cs msg=
+  sendSmsTo (filter (Set.member role . contactRoles . runActive) cs)
+            msg
+
 sendSmsTo :: [Active Contact] -> Text -> IO ()
 sendSmsTo cs msg = do
   loadEnv
@@ -660,11 +723,11 @@ sendSmsTo cs msg = do
   twilSid <- getEnv "TWILIO_ACCT_SID"
   twilAuth <- getEnv "TWILIO_AUTH_TOKEN"
   let activeContacts = runActive <$> cs
-  print =<< traverse (msgEach twilSid twilAuth from . unpack . contactNumber) activeContacts
+  print =<< traverse (msgEach twilSid twilAuth msg from . unpack . contactNumber) activeContacts
   where
-    msgEach sid au from num = runTwilio' (pure sid) (pure au) $ do
-        resp <- TWIL.post $ PostMessage (pack num) from msg
-        pure resp
+    msgEach sid au msg' from num = runTwilio' (pure sid) (pure au) $ do
+      resp <- TWIL.post $ PostMessage (pack num) from msg'
+      pure resp
 
 sendSms :: Text -> IO ()
 sendSms msg = do
@@ -698,26 +761,47 @@ prevWeekStart d
   | getWeekDay d == weekStart = d
   | otherwise = prevWeekStart $ advanceDate (Days (-1)) d
 
--- TODO: fix issue with sending this late night
-emergencySMS :: IO ()
-emergencySMS = do
+getMainLocCalId :: IO (CalId String)
+getMainLocCalId = CalId <$> getEnv "MAIN_LOC_STAFFING_GCAL_ID"
+
+getAnnexEventsCalId :: IO (CalId String)
+getAnnexEventsCalId = CalId <$> getEnv "ANNEX_EVENTS_GCAL_ID"
+
+getAnnexName :: IO Text
+getAnnexName = pack <$> getEnv "ANNEX_NAME"
+
+getMainLocName :: IO Text
+getMainLocName = pack <$> getEnv "MAIN_LOC_NAME"
+
+getAnnexStaffingCalId :: IO (CalId String)
+getAnnexStaffingCalId = CalId <$> getEnv "ANNEX_STAFFING_GCAL_ID"
+
+-- TODO: fix issue with sending this late night (TZoffset issue?)
+mainLocEmergencySMS :: IO ()
+mainLocEmergencySMS = do
+  loadEnv
+  calId    <- getMainLocCalId
   today    <- getInternTime' <$> getToday
   tomorrow <- getTomorrow
+  print $ "\nTODAY: " <> show today
+  print $ "\nTOMORROW: " <> show tomorrow
   contacts <- onlyActive today <$> loadContacts
   let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
       start = Start $ getInternTime' tomorrow
       end = End $ getInternTime' tomorrowEOD
       tzo = localOffset
   sched <- loadShifts
-  rawEvents <- getEvents (start, end)
+  rawEvents <- getEventsForCal calId (start, end)
+  print $ "\n\nRAWEVENTS: " <> show rawEvents
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   if not . null. runGaps $ gaps
     then let preMsg = "Shift not covered tomorrow!\n"
              msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
+             postMsg = "\nRespond with \"shifts\" to claim one right now"
          in
            print ("sending emergency alert to: " <> (pack . show $ contacts))
-           >> sendSmsTo contacts (pack . show $ preMsg <> msg)
+           >> sendSmsTo contacts (pack . show $ preMsg <> msg <> postMsg)
     else print ("no gaps tomorrow" :: Text)
 
 onlyActive :: InternTime -> [Contact] -> [Active Contact]
@@ -730,6 +814,8 @@ onlyActive now =  fmap Active . filter (pastSuspDate . contactSuspendUntil)
 -- TODO: extract and test more of this logic
 testNagAlert :: Text -> IO ()
 testNagAlert staffer = do
+  loadEnv
+  calId <- getMainLocCalId
   today <- getToday
   let
     todayTZ = HG.localTimeGetTimezone today
@@ -739,7 +825,7 @@ testNagAlert staffer = do
     start = getInternTime' <$> Start today
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
   sched <- loadShifts
-  rawEvents <- getEvents (start, end)
+  rawEvents <- getEventsForCal calId (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   if stafferOnCal staffer events
     then print ("What a responsible bastard!" :: Text)
@@ -750,6 +836,8 @@ testNagAlert staffer = do
 -- TODO: extract and test logic
 nagAlert :: IO ()
 nagAlert = do
+  loadEnv
+  calId <- getMainLocCalId
   print "Nagger notifications starting"
   today <- getToday
   let
@@ -761,7 +849,7 @@ nagAlert = do
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
     currentDayIntern = getInternTime' today
   sched <- loadShifts
-  rawEvents <- getEvents (start, end)
+  rawEvents <- getEventsForCal calId  (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   contacts <- onlyActive currentDayIntern <$> loadContacts
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
@@ -769,15 +857,14 @@ nagAlert = do
   if null . runGaps $ gaps
     then pure () -- send no alerts if there are no gaps
     else foldr (msgLaxContacts gaps) (pure ()) toNag
-
   where
-
       msgLaxContacts gaps c _ =
         let name = contactName . runActive $ c
             gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
             preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
+            postMsg = "\nRespond with \"shifts\" to claim one right now"
         in print ("couldn't find " <> name <> " on cal")
-           >> sendSmsTo [c] (preMsg <> gapMsg)
+           >> sendSmsToRole WeeklyRole [c] (preMsg <> gapMsg <> postMsg)
 
 whomToNag :: [GCalEventI] -> [Active Contact] -> [Active Contact]
 whomToNag es = filter $ not . flip stafferOnCal es . contactName . runActive
@@ -792,20 +879,83 @@ stafferOnCal staffer = any (maybe False hasName . gCalSummary)
 -- TODO: fix Pretty instance for gaps
 gapsThisWeekAlert :: IO ()
 gapsThisWeekAlert = do
+  loadEnv
+  mainName <- getMainLocName
+  calId <- getMainLocCalId
   today <- getToday
   contacts <- onlyActive (getInternTime' today) <$> loadContacts
   let
+    dateToStart =
+      if isEndOfWeek today
+      then nextDate <$> today
+      else today
     tzo = localOffset -- TODO: push tzo into state monad
     todayTZ = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
-    (_, endDate) = weekOf $ HG.localTimeUnwrap today
+    (_, endDate) = weekOf $ HG.localTimeUnwrap dateToStart
     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
     start = getInternTime' <$> Start today
     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
   sched <- loadShifts
-  rawEvents <- getEvents (start, end)
+  rawEvents <- getEventsForCal calId (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
-  sendSmsTo contacts $ ("Weekly Schedule Notice:\n" <>)$ fump $ (fmap . fmap . fmap) internToLocal gaps
+  sendSmsToRole WeeklyRole contacts $ ((mainName <> " Weekly Schedule Notice:\n") <>) $ fump $ (fmap . fmap . fmap) internToLocal gaps
+  where
+    isEndOfWeek = (== weekStart) . getWeekDay . nextDate . HG.localTimeUnwrap
+
+annexGapsThisWeekAlert :: IO ()
+annexGapsThisWeekAlert = do
+  loadEnv
+  annexName <- getAnnexName
+  eventCalId <- getAnnexEventsCalId
+  staffingCalId <- getAnnexStaffingCalId
+  today <- getToday
+  contacts <- onlyActive (getInternTime' today) <$> loadContacts
+  let
+    dateToStart =
+      if isEndOfWeek today
+      then nextDate <$> today
+      else today
+    tzo = localOffset -- TODO: push tzo into state monad
+    todayTZ = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
+    (_, endDate) = weekOf $ HG.localTimeUnwrap dateToStart
+    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start = getInternTime' <$> Start today
+    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  rawEvents <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
+  events <- (traverse . traverse) validateGCalEvent' rawEvents
+  rawCoverage <- (fmap.fmap) Covered $ getEventsForCal staffingCalId (start, end)
+  coverage <- (traverse . traverse) validateGCalEvent' rawCoverage
+  let gaps = getAllGapsAllDay tzo coverage events
+  sendSmsToRole AnnexRole contacts (((annexName <> " Schedule:\n") <>) $ fump $ (fmap . fmap . fmap) internToLocal gaps)
+  where
+    isEndOfWeek = (== weekStart) . getWeekDay . nextDate . HG.localTimeUnwrap
+
+annexEmergencySMS :: IO ()
+annexEmergencySMS = do
+  loadEnv
+  annexName <- getAnnexName
+  eventCalId <- getAnnexEventsCalId
+  staffingCalId <- getAnnexStaffingCalId
+  today    <- getInternTime' <$> getToday
+  tomorrow <- getTomorrow
+  contacts <- onlyActive today <$> loadContacts
+  let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
+      start = Start $ getInternTime' tomorrow
+      end = End $ getInternTime' tomorrowEOD
+      tzo = localOffset
+  rawEvents <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
+  events <- (traverse . traverse) validateGCalEvent' rawEvents
+  rawCoverage <- (fmap.fmap) Covered $ getEventsForCal staffingCalId (start, end)
+  coverage <- (traverse . traverse) validateGCalEvent' rawCoverage
+  let gaps = getAllGapsAllDay tzo coverage events
+  if not . null . runGaps $ gaps
+    then let preMsg = annexName <> " events not staffed tomorrow!:\n"
+             msg = fump $ (fmap . fmap . fmap) internToLocal gaps
+         in
+           (print (annexName <> ": sending emergency alert to: " <> (pack . show $ contacts)))
+            >> (sendSmsToRole AnnexRole contacts $ preMsg <> msg)
+    else print (annexName <> ": no gaps tomorrow" :: Text)
 
 -- TODO: rename
 dump = renderStrict . layoutPretty defaultLayoutOptions
@@ -819,35 +969,32 @@ fump = dump . pretty
 displayGaps :: Gaps [Period (DisplayTZ (LocalTime HG.Elapsed))] -> Text
 displayGaps = fump
 
--- TODO: Write a test for the above pretty instance. It's fucked in the
--- binary
-
-testGapAlert :: Int -> Int -> IO ()
-testGapAlert from to = do
-  let tzo = localOffset
-      startDate = DateTime (Date { dateDay = from, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 0 0 0 0
-      endDate = DateTime (Date { dateDay = to, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 23 58 58 0
-      start = Start $ internTimeFromLocalOffset startDate
-      end = End $ internTimeFromLocalOffset endDate
-  sched <- loadShifts
-  rawEvents <- getEvents (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getAllGapsInRange tzo sched (start, end) events
-  print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+-- testGapAlert :: Int -> Int -> IO ()
+-- testGapAlert from to = do
+--   let tzo = localOffset
+--       startDate = DateTime (Date { dateDay = from, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 0 0 0 0
+--       endDate = DateTime (Date { dateDay = to, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 23 58 58 0
+--       start = Start $ internTimeFromLocalOffset startDate
+--       end = End $ internTimeFromLocalOffset endDate
+--   sched <- loadShifts
+--   rawEvents <- getEvents (start, end)
+--   events <- validateGCalEvent' `traverse` rawEvents
+--   let gaps = getAllGapsInRange tzo sched (start, end) events
+--   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
 
 -- TODO: extract and test more of this logic
-testGapsTomorrowAlert :: IO ()
-testGapsTomorrowAlert = do
-  tomorrow <- getTomorrow
-  let tzo = localOffset
-      tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
-      start = Start $ getInternTime' tomorrow
-      end = End $ getInternTime' tomorrowEOD
-  sched <- loadShifts
-  rawEvents <- getEvents (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
-  print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+-- testGapsTomorrowAlert :: IO ()
+-- testGapsTomorrowAlert = do
+--   tomorrow <- getTomorrow
+--   let tzo = localOffset
+--       tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
+--       start = Start $ getInternTime' tomorrow
+--       end = End $ getInternTime' tomorrowEOD
+--   sched <- loadShifts
+--   rawEvents <- getEvents (start, end)
+--   events <- validateGCalEvent' `traverse` rawEvents
+--   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
+--   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
 
 -- this should eventually be in a state monad
 getToday :: IO (LocalTime Date)
@@ -865,14 +1012,15 @@ getCurrentTime = getInternTime' <$> localDateCurrentAt utcOffset
 getTomorrow :: IO (LocalTime Date)
 getTomorrow = (fmap . fmap) nextDate $ getToday
 
-eventsInRange :: StartTime -> EndTime -> IO [GCalEventI]
-eventsInRange start end = do
-  rawEvents <- getEvents (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  pure events
+-- TODO: save these somewhere for calculations
+-- eventsInRange :: StartTime -> EndTime -> IO [GCalEventI]
+-- eventsInRange start end = do
+--   rawEvents <- getEvents (start, end)
+--   events <- validateGCalEvent' `traverse` rawEvents
+--   pure events
 
-summaryDurationsInRange :: StartTime -> EndTime -> IO [(Text, Hours, Minutes)]
-summaryDurationsInRange s e = eventBySummDuration <$> eventsInRange s e
+-- summaryDurationsInRange :: StartTime -> EndTime -> IO [(Text, Hours, Minutes)]
+-- summaryDurationsInRange s e = eventBySummDuration <$> eventsInRange s e
 
 -- ensure that we convert to correct TZ for display purposes
 newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq, Show)
@@ -906,7 +1054,6 @@ instance (Pretty a) => Pretty (Gaps [a]) where
   pretty (Gaps []) = "All shifts covered this week!"
   pretty (Gaps a) = vsep $ ["Open shifts: "]
                             <> fmap pretty a
-                            <> ["Respond with \"shifts\" to claim one right now"]
 
 instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
   pretty (Period s _ (Just name)) = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty name
@@ -1165,6 +1312,7 @@ server = twilMsg
   where
     twilMsg :: Maybe Cookies -> TwilioMsgData -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     twilMsg cookies inMsg = do
+      liftIO loadEnv
       contacts <- liftIO loadContacts
       now <- liftIO getCurrentTime
       let inboundNumber = (msgFrom inMsg)
@@ -1231,7 +1379,6 @@ performCmd (UnrecognizedCmd d) =
 
 performCmd AvailableShifts = do
   gaps <- indexGaps <$> (liftIO . gapsNowTo . Days $ 7)
-  liftIO $ print $ "GAPGS: gaps"
   let preMsg = "Open shifts this week.\nRespond with the number to claim it.\n"
   pure
     $ addAvailableshiftsCookie
@@ -1242,7 +1389,8 @@ performCmd UnrecognizedNumber = do
   pure $ destroyCookie $ twimlMsg ""
 
 performCmd (ClaimShift contact period) = do
-  mEvents <- liftIO $ (fmap . fmap) validateGCalEvent $ getEvents ((Start $ periodStart period), (End $ periodEnd period))
+  calId <- liftIO getMainLocCalId
+  mEvents <- liftIO $ (fmap . fmap) validateGCalEvent $ getEventsForCal calId ((Start $ periodStart period), (End $ periodEnd period))
   let available = not <$> (hasOverlap <$> (sequence mEvents) <*> pure (mkGCalEvent period ""))
   case available of
     Right True ->
@@ -1359,6 +1507,8 @@ logHeaders logger req s i = print (requestHeaders req) >> logger req s i
 
 gapsNowTo :: Days Int -> IO (Gaps [Period InternTime])
 gapsNowTo d = do
+  loadEnv
+  calId <- getMainLocCalId
   today <- getToday
   let
     tzo = localOffset
@@ -1366,8 +1516,7 @@ gapsNowTo d = do
     start = getInternTime' <$> Start today
     end = getInternTime' <$> endDateEOD
   sched <- loadShifts
-  rawEvents <- getEvents (start, end)
-  liftIO $ print $ "\nRAW: " <> show rawEvents
+  rawEvents <- getEventsForCal calId (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   pure $ getMinGapsInRange tzo minGapDuration sched (start, end) events
 
