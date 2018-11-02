@@ -911,7 +911,7 @@ eod :: Date -> DateTime
 eod d = DateTime d $ TimeOfDay 23 59 0 0
 
 intoIntern :: Functor f => Date -> f (ShiftTime TimeOfDay) -> f InternTime
-intoIntern day = fmap $ internTimeFromLocalOffset . DateTime day . shiftTimeTime
+intoIntern day = fmap $ internTimeFromLocalOffset . DateTime day . stTime
 
 shiftTimeWZone :: a -> ShiftTime a
 shiftTimeWZone a = ShiftTime a localOffset

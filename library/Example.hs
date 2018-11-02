@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -11,9 +11,9 @@
 
 
 -- TODO:
--- check for ruby pairity
 -- show annex event names in alerts
 -- claiming annex shifts
+-- check for ruby pairity
 -- figure out how to handle suspensions for both locations
 -- use phone number as ID
 -- improve cmd matching
@@ -25,7 +25,6 @@
 -- split <say> nodes into <gather> parent
 -- test parsing contacts.yaml
 -- consider how/when to number gaps (for selection) (or to make more like ruby version)
--- refactor with lenses
 -- consider rendering shift select list from same data as shifts json (first make a map?)
 -- consider switching to megaparsec
 -- contacts in db
@@ -55,7 +54,7 @@
 -- fixz correspondance between shift select map and displayed shifts
 -- implement twilio msg conversation
 -- capture twilio cookies
--- figure out how the fuck to destroy the cookies
+-- destroying cookies
 -- set twilio cookies
 -- api endpoint and msg response
 -- contacts in yaml
@@ -92,7 +91,7 @@ import qualified Data.Map as Map
 import Formatting (format, (%))
 import qualified Formatting.Formatters as FMT
 import Formatting.Formatters (left, int)
-import Data.Text.Prettyprint.Doc (defaultLayoutOptions, layoutPretty, Pretty(..), vsep, (<+>))
+import Data.Text.Prettyprint.Doc (Pretty(..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
 import Data.Maybe (catMaybes)
 import Data.Int (Int64)
 import Data.Yaml (decodeFileThrow, encodeFile)
@@ -187,122 +186,323 @@ import Data.Hourglass ( UTC(..)
                       , fromSeconds
                       , timeGetDate
                       )
+
+type InternTime = Intern (LocalTime HG.Elapsed)
+
+newtype Days a = Days a deriving (Show, Eq)
+newtype DisplayMonthDate a = DisplayMonthDate a
+newtype Concise a = Concise a
+newtype JWTException = JWTException String
+newtype Start a = Start { runStart :: a } deriving (Functor, Show, Eq)
+newtype End a = End { runEnd :: a } deriving (Functor, Show, Eq)
+newtype CalId a = CalId a
+newtype ISO8601 a = ISO8601 a deriving (Show, Eq)
+newtype Gaps a = Gaps { runGaps :: a } deriving (Show, Eq, Functor)
+-- ensure that internal time is always UTC
+newtype Intern a = Intern { runIntern :: a } deriving (Show, Functor, Ord, Eq)
+newtype Covered a = Covered { runCovered :: a } deriving (Functor, Foldable, Traversable, Show)
+newtype StoreEvent a = StoreEvent { runStoreEvent :: a } deriving (Functor, Foldable, Traversable, Show)
+-- ensure we don't message inactive contacts
+newtype Active a = Active { runActive :: a } deriving (Show, Eq)
+-- ensure that we convert to correct TZ for display purposes
+newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq, Show)
+-- track that number is a date for display
+newtype DisplayDate a = DisplayDate { runDD :: a } deriving (Functor)
+
+data TwilioMsgData = TMsgData {
+    msgBody :: Text
+  , msgFrom :: Text
+  , msgTo :: Text
+  }
+  deriving Show
+
+data ContactRole = WeeklyRole | AnnexRole deriving (Show, Eq, Ord)
+
 data Contact = Contact { contactName :: Text
                        , contactNumber :: Text
                        , contactSuspendUntil :: Maybe InternTime
                        , contactId :: Int
                        , contactRoles :: Set ContactRole
                        }
+             deriving (Show, Eq)
+
+data Cmd =
+    AvailableShifts
+  | ClaimShift Contact (Period InternTime)
+  | Suspend Contact (Days Int)
+  | Help
+  | UnrecognizedNumber
+  | UnrecognizedCmd TwilioMsgData
+
+data TwilioCallResponse = TCallResp Text
+data TwilioMsgResponse = TMsgResp Text
+data Period a = Period { periodStart :: a
+                       , periodEnd :: a
+                       , periodName :: Maybe Text
+                       } deriving (Show, Eq, Functor)
+
+data GapRelationship =
+    PostGap
+  | PriorGap
+  | SubsetGap
+  | StrictSupersetGap
+  | IntersectGap
   deriving (Show, Eq)
 
-data ContactRole = WeeklyRole | AnnexRole
-  deriving (Show, Eq, Ord)
+data ShiftTime a =
+  ShiftTime { stTime :: a
+            , stZone :: TimezoneOffset
+            }
+  deriving (Show, Eq, Functor)
 
-newtype JWTException = JWTException String
-
-instance Exception JWTException
-
-instance Show JWTException where
-  show (JWTException str) = "Error creating JWT: " <> show str
-
-getAcctEmail :: IO Text
-getAcctEmail = getEnv acctVar >>= pure . pack
-  where acctVar = "GOOGLE_SERVICE_ACCT_EMAIL"
-
-getPEM :: IO String
-getPEM = do
-  rawPem <- getEnv keyVar
-  -- getEnv adds an extra escape to the newlines, so we remove those
-  let pem = unpack $ replace "\\n" "\n" $ pack rawPem
-  pure $ pem
-  where
-    keyVar = "GOOGLE_ACCT_KEY"
-
-googleJWT :: IO SignedJWT
-googleJWT = do
-  email <- getAcctEmail
-  pem <- fromPEMString =<< getPEM
-  jwt <- getSignedJWT email Nothing [calAuth] Nothing pem
-  either (throwIO . JWTException) pure jwt
-  where
-    calAuth = "https://www.googleapis.com/auth/calendar"
-
-getAuthToken :: SignedJWT -> IO ByteString
-getAuthToken jwt = do
-  resp <- post "https://www.googleapis.com/oauth2/v4/token"
-    [
-      "grant_type" := grantString
-    , "assertion" := show jwt
-    ]
-  mToken <- pure $ unwrapResult $ fmap fromJSON $ resp ^? responseBody . key "access_token"
-  maybe (throwIO GAuthTokenException) pure $ mToken
-  where
-    grantString = "urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text
-
--- TODO: lenses
-unwrapResult :: Maybe (Result Text) -> Maybe ByteString
-unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
-unwrapResult _ = Nothing
-
-testAuthToken :: IO ByteString
-testAuthToken = loadEnv >> googleJWT >>= getAuthToken
+-- TODO: push TZ from shifttime into shiftweek (we don't want to allow different
+-- zones per shift
+data ShiftWeek a = ShiftW
+  { wkMon :: [Period a]
+  , wkTue :: [Period a]
+  , wkWed :: [Period a]
+  , wkThu :: [Period a]
+  , wkFri :: [Period a]
+  , wkSat :: [Period a]
+  , wkSun :: [Period a]
+  }
+  deriving (Show, Eq)
 
 data GAuthTokenException = GAuthTokenException
+
+data ResponseErrorGCalEvents = ResponseErrorGCalEvents String
+-- todo: refactor to use Period
+
+data GCalEvent a = GCalEvent
+  { gCalSummary :: Maybe Text
+  , gCalDesc :: Maybe Text
+  , gCalStart :: a
+  , gCalEnd :: a
+  } deriving (Show, Eq, Functor)
+data ISO8601Error = ISO8601Error String
+
+data TwilioCallData = TCallData {
+    callFrom :: Text
+  , callTo :: Text
+  }
+  deriving Show
+
+type CookiesMap = Map ByteString BSL.ByteString
+type ShiftSelectMap = Map Int PeriodIntern
+type IxGaps a = Map Int (Period a)
+type StartDate = Start Date
+type EndDate = End Date
+type ShiftWeekTime = ShiftWeek ShiftTimeOfDay
+type ShiftWeekRaw = ShiftWeek RawShiftTime
+type PeriodIntern = Period InternTime
+type RawShiftTime = ShiftTime (Int64, Int64)
+type ShiftTimeOfDay = ShiftTime TimeOfDay
+type RawGCalEvent = GCalEvent (ISO8601 Text)
+type GCalEventI = GCalEvent InternTime
+type StartTime = Start InternTime
+type EndTime = End InternTime
+
+-- instance Bitraversable ShiftTime where
+
+instance FromJSON InternTime where
+  parseJSON = withText "InternTime" $ \txt ->
+    either (fail . show) pure $ parse8601 $ ISO8601 txt
+
+instance ToXml TwilioCallResponse where
+  toXml (TCallResp a) =
+    [
+      element' "Response" HMap.empty
+      [
+        element' "Say" (HMap.fromList [("voice", "woman")]) ([text a])
+      ]
+    ]
+
+instance ToXml TwilioMsgResponse where
+  toXml (TMsgResp a) =
+    [
+      element' "Response" HMap.empty
+      [
+        element' "Message" HMap.empty ([text a])
+      ]
+    ]
+
+instance FromForm TwilioMsgData where
+  fromForm = handleErr . maybeTData
+    where
+      maybeTData :: Form -> Maybe TwilioMsgData
+      maybeTData f = do
+        let m = unForm f
+        body <- HMap.lookup "Body" m
+        from <- HMap.lookup "From" m
+        to   <- HMap.lookup "To"   m
+        pure $ TMsgData (head body) (head from) (head to)
+
+      handleErr = maybe (Left "Failure parsing twilio message form-data") Right
+
+instance FromForm TwilioCallData where
+  fromForm = handleErr . maybeTData
+    where
+      maybeTData :: Form -> Maybe TwilioCallData
+      maybeTData f = do
+        let m = unForm f
+        from <- HMap.lookup "From" m
+        to   <- HMap.lookup "To"   m
+        pure $ TCallData (head from) (head to)
+
+      handleErr = maybe (Left "Failure parsing twilio call form-data") Right
+
+instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle empty
+  pretty im = vsep $ fmap prettyIx $ Map.toList im
+    where
+      prettyIx (i, p) = pretty i <> ":" <+> pretty p
+
+instance (Pretty a) => Pretty (Gaps [a]) where
+  pretty (Gaps []) = "All shifts covered this week!"
+  pretty (Gaps a) = vsep $ ["Open shifts: "]
+                            <> fmap pretty a
+
+instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
+  pretty (Period s _ (Just name)) = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty name
+  pretty (Period s e Nothing)     = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty s
+                                    <+> "to" <+> pretty e
+
+instance Pretty (DisplayTZ Date) where
+  pretty d = pretty  (getWeekDay <$> d)
+
+instance Pretty (DisplayMonthDate (DisplayTZ (LocalTime Date))) where
+  pretty (DisplayMonthDate d) =
+    pretty (Concise $ dateMonth . HG.localTimeUnwrap <$> d)
+    <+> pretty (DisplayDate . dateDay . HG.localTimeUnwrap <$> d)
+
+instance Pretty (DisplayTZ (LocalTime Date)) where
+  pretty = pretty . fmap HG.localTimeUnwrap
+
+instance Pretty (DisplayTZ WeekDay) where
+  pretty (DisplayTZ Monday)    = "Mon"
+  pretty (DisplayTZ Tuesday)   = "Tue"
+  pretty (DisplayTZ Wednesday) = "Wed"
+  pretty (DisplayTZ Thursday)  = "Thu"
+  pretty (DisplayTZ Friday)    = "Fri"
+  pretty (DisplayTZ Saturday)  = "Sat"
+  pretty (DisplayTZ Sunday)    = "Sun"
+
+instance Pretty (DisplayTZ (DisplayDate Int)) where
+  pretty (DisplayTZ (DisplayDate a)) = pretty $ format int a
+
+instance Pretty (DisplayTZ (LocalTime HG.Elapsed)) where
+  pretty (DisplayTZ e) =
+    pretty $ DisplayTZ $ toTime e
+    where
+      toTime = dtTime . HG.timeGetDateTimeOfDay . HG.localTimeUnwrap
+
+  -- TODO: clean up
+instance Pretty (DisplayTZ TimeOfDay) where
+  pretty (DisplayTZ t) = do
+    let formattedTime =
+          if minutes == 0
+          then format (FMT.int ) hoursFmt
+          else format (FMT.int % ":" % left 2 '0' ) hoursFmt minutes
+
+    pretty $ formattedTime
+
+    where
+      hoursFmt = if (todHour t) <= 12
+             then (\(Hours a) -> a) (todHour t)
+             else (\(Hours a) -> a) (todHour t) - 12
+
+      minutes = (\(Minutes a) -> a) (todMin t)
+
+      -- meridian = if (todHour t) < 12
+      --            then "AM"
+      --            else "PM"
+
+instance Pretty (Concise (DisplayTZ Month)) where
+  pretty (Concise (DisplayTZ January))  = "Jan"
+  pretty (Concise (DisplayTZ February)) = "Feb"
+  pretty (Concise (DisplayTZ March))    = "Mar"
+  pretty (Concise (DisplayTZ April))    = "Apr"
+  pretty (Concise (DisplayTZ May))      = "May"
+  pretty (Concise (DisplayTZ June))     = "Jun"
+  pretty (Concise (DisplayTZ July))     = "Jul"
+  pretty (Concise (DisplayTZ August))   = "Aug"
+  pretty (Concise (DisplayTZ September))= "Sep"
+  pretty (Concise (DisplayTZ October))  = "Oct"
+  pretty (Concise (DisplayTZ November)) = "Nov"
+  pretty (Concise (DisplayTZ December)) = "Dec"
+
+instance FromHttpApiData Cookies where
+   parseHeader = Right . parseCookies
+
+instance FromJSON ContactRole where
+  parseJSON = withText "ContactRole" $ \t ->
+    case t of
+      "weekly" -> pure WeeklyRole
+      "annex" -> pure AnnexRole
+      _ -> fail "expecting a valid contact role"
+
+instance ToJSON ContactRole where
+  toJSON WeeklyRole = String "weekly"
+  toJSON AnnexRole = String "annex"
 
 instance Exception GAuthTokenException
 
 instance Show GAuthTokenException where
   show GAuthTokenException = "Error fetching google auth token"
 
--- todo: lenses
-unwrapEvents :: Maybe (Result [Maybe RawGCalEvent]) -> IO [Maybe RawGCalEvent]
-unwrapEvents (Just (Success events)) = pure events
-unwrapEvents err = throwIO $ ResponseErrorGCalEvents $ show err
+instance Exception JWTException
 
-localOffset :: TimezoneOffset
-localOffset = TimezoneOffset (-240)
+instance Show JWTException where
+  show (JWTException str) = "Error creating JWT: " <> show str
 
-type StartTime = Start InternTime
-type EndTime = End InternTime
+instance FromJSON RawShiftTime where
+  parseJSON = withText "RawShiftTime" $ \str -> do
+    (hrs, mins) <- errHandler $ parse clockTimeParser "timeParser" str
+    ShiftTime <$> ((,) <$> readHours hrs <*> readMinutes mins) <*> pure localOffset
+      where errHandler :: Either ParseError (String, String) -> Parser (String, String)
+            errHandler (Right a) = pure a
+            errHandler (Left err) = fail $ "Error parsing hours: " <> show err
 
-newtype Start a = Start { runStart :: a } deriving (Functor, Show, Eq)
-newtype End a = End { runEnd :: a } deriving (Functor, Show, Eq)
+            readHours :: Monad m => String -> m Int64
+            readHours hrs | Just hrsParsed <- readMaybe hrs = pure hrsParsed
+                          | otherwise = fail $ "Couldn't parse hours"
 
-newtype CalId a = CalId a
+            readMinutes :: Monad m => String -> m Int64
+            readMinutes mins | Just minsParsed <- readMaybe mins = pure minsParsed
+                             | otherwise = fail $ "Couldn't parse minutes"
 
--- TODO: deal with paginated results (`nextPageToken`)
--- if we don't have the "singleEvents" query param set, then we might get
--- recurring dates before the earliest date we request
-getEventsForCal :: CalId String -> (StartTime, EndTime) -> IO [RawGCalEvent]
-getEventsForCal (CalId cid) ((Start start), (End end)) = do
-  let (fmtMin, fmtMax) = (show8601UTC start, show8601UTC end)
-  loadEnv
-  token <- getAuthToken =<< googleJWT
-  let reqOpts = defaults
-             & auth ?~ oauth2Bearer token
-             & param "orderBy" .~ ["startTime"]
-             & param "singleEvents" .~ ["true"]
-             & param "timeMin" .~ [fmtMin]
-             & param "timeMax" .~ [fmtMax]
-             & param "maxResults" .~ ["2500"]
-  resp <- getWith reqOpts $ url cid
-  let mEvents = fromJSON <$> preview (responseBody . key "items") resp
-  catMaybes <$> (unwrapEvents mEvents)
-  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
-          <> calID
-          <> "/events"
+instance FromJSON a => FromJSON (Period a) where
+  parseJSON = withArray "Period" $ \ary ->
+    Period
+    <$> (parseJSON $ ary ! 0)
+    <*> (parseJSON $ ary ! 1)
+    <*> (sequence $ parseJSON <$> ary !? 2)
 
-postEvent e = do
-  loadEnv
-  calId <- getEnv "GCAL_ID"
-  token <- getAuthToken =<< googleJWT
-  resp <- postWith (defaults & auth ?~ oauth2Bearer token) (url calId) (toJSON e)
-  return resp
-  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
-          <> calID
-          <> "/events"
+instance ToJSON (Period InternTime) where
+  toJSON p =
+    toJSON [
+      periodStart p
+    , periodEnd p
+    ]
 
-data ResponseErrorGCalEvents = ResponseErrorGCalEvents String
+instance ToJSON InternTime where
+  toJSON = toJSON . show8601UTC
+
+instance FromJSON a => FromJSON (ShiftWeek a) where
+  parseJSON = withObject "ShiftWeek" $ \o ->
+    ShiftW
+      <$> o .: "monday"
+      <*> o .: "tuesday"
+      <*> o .: "wednesday"
+      <*> o .: "thursday"
+      <*> o .: "friday"
+      <*> o .: "saturday"
+      <*> o .: "sunday"
+
+instance Exception ISO8601Error
+
+instance Show ISO8601Error where
+  show (ISO8601Error str) =
+    "Error: Couldn't parse ISO8601 date format from: " <> str
 
 instance Exception ResponseErrorGCalEvents
 
@@ -310,18 +510,6 @@ instance Show ResponseErrorGCalEvents where
   show (ResponseErrorGCalEvents a) =
     "Error: in google calandar response: " <> show a
 
-type RawGCalEvent = GCalEvent (ISO8601 Text)
-type GCalEventI = GCalEvent InternTime
-
-newtype ISO8601 a = ISO8601 a deriving (Show, Eq)
-
--- todo: refactor to use Period
-data GCalEvent a = GCalEvent
-  { gCalSummary :: Maybe Text
-  , gCalDesc :: Maybe Text
-  , gCalStart :: a
-  , gCalEnd :: a
-  } deriving (Show, Eq, Functor)
 
 -- TODO: Use timezone from cal to finish date?
 -- or GADT to construct different type depending on date or datetime presence?
@@ -378,16 +566,126 @@ instance ToJSON Contact where
            <> "roles" .= roles
           )
 
-instance FromJSON ContactRole where
-  parseJSON = withText "ContactRole" $ \t ->
-    case t of
-      "weekly" -> pure WeeklyRole
-      "annex" -> pure AnnexRole
-      _ -> fail "expecting a valid contact role"
+getAcctEmail :: IO Text
+getAcctEmail = getEnv acctVar >>= pure . pack
+  where acctVar = "GOOGLE_SERVICE_ACCT_EMAIL"
 
-instance ToJSON ContactRole where
-  toJSON WeeklyRole = String "weekly"
-  toJSON AnnexRole = String "annex"
+getPEM :: IO String
+getPEM = do
+  rawPem <- getEnv keyVar
+  -- getEnv adds an extra escape to the newlines, so we remove those
+  let pem = unpack $ replace "\\n" "\n" $ pack rawPem
+  pure $ pem
+  where
+    keyVar = "GOOGLE_ACCT_KEY"
+
+googleJWT :: IO SignedJWT
+googleJWT = do
+  email <- getAcctEmail
+  pem <- fromPEMString =<< getPEM
+  jwt <- getSignedJWT email Nothing [calAuth] Nothing pem
+  either (throwIO . JWTException) pure jwt
+  where
+    calAuth = "https://www.googleapis.com/auth/calendar"
+
+getAuthToken :: SignedJWT -> IO ByteString
+getAuthToken jwt = do
+  resp <- post "https://www.googleapis.com/oauth2/v4/token"
+    [
+      "grant_type" := grantString
+    , "assertion" := show jwt
+    ]
+  mToken <- pure $ unwrapResult $ fmap fromJSON $ resp ^? responseBody . key "access_token"
+  maybe (throwIO GAuthTokenException) pure $ mToken
+  where
+    grantString = "urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text
+
+unwrapResult :: Maybe (Result Text) -> Maybe ByteString
+unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
+unwrapResult _ = Nothing
+
+testAuthToken :: IO ByteString
+testAuthToken = loadEnv >> googleJWT >>= getAuthToken
+
+
+unwrapEvents :: Maybe (Result [Maybe RawGCalEvent]) -> IO [Maybe RawGCalEvent]
+unwrapEvents (Just (Success events)) = pure events
+unwrapEvents err = throwIO $ ResponseErrorGCalEvents $ show err
+
+localOffset :: TimezoneOffset
+localOffset = TimezoneOffset (-240)
+
+getInternTime :: Timeable t => TimezoneOffset -> t -> InternTime
+getInternTime currentTZ =
+  Intern
+  . HG.localTimeSetTimezone utcOffset
+  . HG.localTime currentTZ
+  . HG.timeGetElapsed
+
+getInternTime' :: Timeable t => LocalTime t -> InternTime
+getInternTime' lt =
+  getInternTime (HG.localTimeGetTimezone lt) $ HG.localTimeUnwrap lt
+
+internTimeFromUTC :: Timeable t => t -> InternTime
+internTimeFromUTC = getInternTime utcOffset
+
+internTimeFromLocalOffset :: Timeable t => t -> InternTime
+internTimeFromLocalOffset = getInternTime localOffset
+
+utcOffset :: TimezoneOffset
+utcOffset = TimezoneOffset $ timezoneOffset UTC
+
+parse8601 :: ISO8601 Text -> Either ISO8601Error InternTime
+parse8601 (ISO8601 s) =
+  toEither maybeIntern
+  where
+    toEither = maybe (Left . ISO8601Error $ unpack s) Right
+    maybeIntern = internTimeFromUTC . HG.timeGetElapsed
+                  <$> HG.timeParse ISO8601_DateAndTime (unpack s)
+
+show8601 :: TimezoneOffset -> InternTime -> Text
+show8601 tzo = pack
+  . HG.localTimePrint ISO8601_DateAndTime
+  . HG.localTimeSetTimezone tzo
+  . runIntern
+
+show8601UTC :: InternTime -> Text
+show8601UTC =  show8601 utcOffset
+
+show8601Local :: InternTime -> Text
+show8601Local = show8601 localOffset
+
+-- TODO: deal with paginated results (`nextPageToken`)
+-- if we don't have the "singleEvents" query param set, then we might get
+-- recurring dates before the earliest date we request
+getEventsForCal :: CalId String -> (StartTime, EndTime) -> IO [RawGCalEvent]
+getEventsForCal (CalId cid) ((Start start), (End end)) = do
+  let (fmtMin, fmtMax) = (show8601UTC start, show8601UTC end)
+  loadEnv
+  token <- getAuthToken =<< googleJWT
+  let reqOpts = defaults
+             & auth ?~ oauth2Bearer token
+             & param "orderBy" .~ ["startTime"]
+             & param "singleEvents" .~ ["true"]
+             & param "timeMin" .~ [fmtMin]
+             & param "timeMax" .~ [fmtMax]
+             & param "maxResults" .~ ["2500"]
+  resp <- getWith reqOpts $ url cid
+  let mEvents = fromJSON <$> preview (responseBody . key "items") resp
+  catMaybes <$> (unwrapEvents mEvents)
+  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
+          <> calID
+          <> "/events"
+
+postEvent e = do
+  loadEnv
+  calId <- getEnv "GCAL_ID"
+  token <- getAuthToken =<< googleJWT
+  resp <- postWith (defaults & auth ?~ oauth2Bearer token) (url calId) (toJSON e)
+  return resp
+  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
+          <> calID
+          <> "/events"
 
 validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
 validateGCalEvent (GCalEvent smry dsc end st) =
@@ -399,32 +697,6 @@ validateGCalEvent (GCalEvent smry dsc end st) =
 
 validateGCalEvent' :: RawGCalEvent -> IO GCalEventI
 validateGCalEvent' = either throwIO pure . validateGCalEvent
-
-data ISO8601Error = ISO8601Error String
-
-instance Exception ISO8601Error
-
-instance Show ISO8601Error where
-  show (ISO8601Error str) =
-    "Error: Couldn't parse ISO8601 date format from: " <> str
-
-type RawShiftTime = ShiftTime (Int64, Int64)
-type ShiftTimeOfDay = ShiftTime TimeOfDay
-
-data ShiftTime a =
-  ShiftTime { shiftTimeTime :: a
-            , shiftTimeTZ :: TimezoneOffset
-            }
-  deriving (Show, Eq)
-
-type ShiftWeekTime = ShiftWeek ShiftTimeOfDay
-type ShiftWeekRaw = ShiftWeek RawShiftTime
-
-type InternTime = Intern (LocalTime HG.Elapsed)
-type PeriodIntern = Period InternTime
-
--- ensure that internal time is always UTC
-newtype Intern a = Intern { runIntern :: a } deriving (Show, Functor, Ord, Eq)
 
 -- TODO: validate times
 validateShiftWeek :: ShiftWeekRaw -> ShiftWeekTime
@@ -438,32 +710,10 @@ validateShiftWeek (ShiftW mo tu w th f sa su) =
          (toTime su)
   where
     toTime :: [Period RawShiftTime] -> [Period ShiftTimeOfDay]
-    toTime = fmap fuck
+    toTime = fmap . fmap . fmap $ uncurry mkTOD
 
-  -- TODO: clean this up with lenses
-    fuck :: Period RawShiftTime -> Period ShiftTimeOfDay
-    fuck (Period (ShiftTime (shr, smin) tza) (ShiftTime (ehr, emin) tzb) n) =
-      Period  (ShiftTime (hmTime shr smin) tza) (ShiftTime (hmTime ehr emin) tzb) n
-
-    hmTime :: Int64 -> Int64 -> TimeOfDay
-    hmTime h m = TimeOfDay (Hours h) (Minutes m) 0 0
-
-
-data Period a = Period { periodStart :: a
-                       , periodEnd :: a
-                       , periodName :: Maybe Text
-                       } deriving (Show, Eq, Functor)
-
--- TODO: push TZ from shifttime into shiftweek (we don't want to allow different
--- zones per shift
-data ShiftWeek a = ShiftW { wkMon :: [Period a]
-                          , wkTue :: [Period a]
-                          , wkWed :: [Period a]
-                          , wkThu :: [Period a]
-                          , wkFri :: [Period a]
-                          , wkSat :: [Period a]
-                          , wkSun :: [Period a]
-                          } deriving (Show, Eq)
+    mkTOD :: Int64 -> Int64 -> TimeOfDay
+    mkTOD h m = TimeOfDay (Hours h) (Minutes m) 0 0
 
 suspendDaysParser :: ParsecT Text u Identity (Maybe (Maybe (Days Int)))
 suspendDaysParser = do
@@ -507,52 +757,6 @@ nameParser name = traverse (\part -> manyTill anyChar $ string part) nameParts
   where
     nameParts = words . unpack . toLower $ name
 
-instance FromJSON RawShiftTime where
-  parseJSON = withText "RawShiftTime" $ \str -> do
-    (hrs, mins) <- errHandler $ parse clockTimeParser "timeParser" str
-    ShiftTime <$> ((,) <$> readHours hrs <*> readMinutes mins) <*> pure localOffset
-      where errHandler :: Either ParseError (String, String) -> Parser (String, String)
-            errHandler (Right a) = pure a
-            errHandler (Left err) = fail $ "Error parsing hours: " <> show err
-
-            readHours :: Monad m => String -> m Int64
-            readHours hrs | Just hrsParsed <- readMaybe hrs = pure hrsParsed
-                          | otherwise = fail $ "Couldn't parse hours"
-
-            readMinutes :: Monad m => String -> m Int64
-            readMinutes mins | Just minsParsed <- readMaybe mins = pure minsParsed
-                             | otherwise = fail $ "Couldn't parse minutes"
-
-instance FromJSON a => FromJSON (Period a) where
-  parseJSON = withArray "Period" $ \ary ->
-    Period
-    <$> (parseJSON $ ary ! 0)
-    <*> (parseJSON $ ary ! 1)
-    <*> (sequence $ parseJSON <$> ary !? 2)
-
-instance ToJSON (Period InternTime) where
-  toJSON p =
-    toJSON [
-      periodStart p
-    , periodEnd p
-    ]
-
-instance ToJSON InternTime where
-  toJSON = toJSON . show8601UTC
-
-instance FromJSON a => FromJSON (ShiftWeek a) where
-  parseJSON = withObject "ShiftWeek" $ \o ->
-    ShiftW
-      <$> o .: "monday"
-      <*> o .: "tuesday"
-      <*> o .: "wednesday"
-      <*> o .: "thursday"
-      <*> o .: "friday"
-      <*> o .: "saturday"
-      <*> o .: "sunday"
-
-newtype Gaps a = Gaps { runGaps :: a } deriving (Show, Eq, Functor)
-
 minGapDuration :: Minutes
 minGapDuration = 65
 
@@ -570,9 +774,6 @@ getAllGapsInRange tzo shifts (start, end) events =
     shiftsAndEvents = pairShiftsAndEvents datedShifts datedEvents
     datedShifts = shiftsInRange tzo (start, end) shifts
     datedEvents = Map.fromList $ groupByDate tzo events
-
-newtype Covered a = Covered { runCovered :: a } deriving (Functor, Foldable, Traversable, Show)
-newtype StoreEvent a = StoreEvent { runStoreEvent :: a } deriving (Functor, Foldable, Traversable, Show)
 
 -- TODO: should daterange be a period?
 -- TODO: do we need tzo here? (It seems not as we're comparing intern to intern?)
@@ -595,9 +796,6 @@ pairShiftsAndEvents (d:ds) e =
   case Map.lookup (fst d) e of
     Just events -> (snd d, events) : pairShiftsAndEvents ds e
     Nothing     -> (snd d, []) : pairShiftsAndEvents ds e
-
-type StartDate = Start Date
-type EndDate = End Date
 
 -- any shift that *starts* in range
 shiftsInRange :: TimezoneOffset -> (StartTime, EndTime) -> ShiftWeekTime -> [(Date, [PeriodIntern])]
@@ -673,14 +871,6 @@ alterGaps event gaps@(g:gs) =
     StrictSupersetGap -> splitGap g event <> alterGaps event gs
     IntersectGap      -> shrinkGap g event : alterGaps event gs
 
-data GapRelationship =
-    PostGap
-  | PriorGap
-  | SubsetGap
-  | StrictSupersetGap
-  | IntersectGap
-  deriving (Show, Eq)
-
 splitGap :: PeriodIntern -> GCalEventI -> [PeriodIntern]
 splitGap g e = [
     Period (periodStart g) (gCalStart e) Nothing
@@ -707,9 +897,6 @@ pickShiftSelector Thursday = wkThu
 pickShiftSelector Friday = wkFri
 pickShiftSelector Saturday = wkSat
 pickShiftSelector Sunday = wkSun
-
--- ensure we don't message inactive contacts
-newtype Active a = Active { runActive :: a } deriving (Show, Eq)
 
 sendSmsToRole :: ContactRole -> [Active Contact] -> Text -> IO ()
 sendSmsToRole role cs msg=
@@ -781,10 +968,9 @@ mainLocEmergencySMS :: IO ()
 mainLocEmergencySMS = do
   loadEnv
   calId    <- getMainLocCalId
+  name    <- getMainLocName
   today    <- getInternTime' <$> getToday
   tomorrow <- getTomorrow
-  print $ "\nTODAY: " <> show today
-  print $ "\nTOMORROW: " <> show tomorrow
   contacts <- onlyActive today <$> loadContacts
   let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
       start = Start $ getInternTime' tomorrow
@@ -792,16 +978,15 @@ mainLocEmergencySMS = do
       tzo = localOffset
   sched <- loadShifts
   rawEvents <- getEventsForCal calId (start, end)
-  print $ "\n\nRAWEVENTS: " <> show rawEvents
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   if not . null. runGaps $ gaps
-    then let preMsg = "Shift not covered tomorrow!\n"
-             msg = pretty $ (fmap . fmap . fmap) internToLocal gaps
+    then let preMsg = name <> " shift not covered tomorrow!\n"
+             msg = renderGaps gaps
              postMsg = "\nRespond with \"shifts\" to claim one right now"
          in
            print ("sending emergency alert to: " <> (pack . show $ contacts))
-           >> sendSmsTo contacts (pack . show $ preMsg <> msg <> postMsg)
+           >> sendSmsTo contacts (preMsg <> msg <> postMsg)
     else print ("no gaps tomorrow" :: Text)
 
 onlyActive :: InternTime -> [Contact] -> [Active Contact]
@@ -830,7 +1015,7 @@ testNagAlert staffer = do
   if stafferOnCal staffer events
     then print ("What a responsible bastard!" :: Text)
     else let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
-             gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+             gapMsg = pack $ show $ renderGaps gaps
          in print $ "couldn't find " <> staffer <> pack " on cal\n" <> gapMsg
 
 -- TODO: extract and test logic
@@ -861,7 +1046,7 @@ nagAlert = do
   where
       msgLaxContacts gaps c _ =
         let name = contactName . runActive $ c
-            gapMsg = pack $ show $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+            gapMsg = pack $ show $ renderGaps gaps
             preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
             postMsg = "\nRespond with \"shifts\" to claim one right now"
         in print ("couldn't find " <> name <> " on cal")
@@ -900,7 +1085,7 @@ gapsThisWeekAlert = do
   rawEvents <- getEventsForCal calId (start, end)
   events <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
-  sendSmsToRole WeeklyRole contacts $ ((mainName <> " Weekly Schedule Notice:\n") <>) $ fump $ (fmap . fmap . fmap) internToLocal gaps
+  sendSmsToRole WeeklyRole contacts $ ((mainName <> " Weekly Schedule Notice:\n") <>) $ renderGaps gaps
   where
     isEndOfWeek = (== weekStart) . getWeekDay . nextDate . HG.localTimeUnwrap
 
@@ -928,9 +1113,12 @@ annexGapsThisWeekAlert = do
   rawCoverage <- (fmap.fmap) Covered $ getEventsForCal staffingCalId (start, end)
   coverage <- (traverse . traverse) validateGCalEvent' rawCoverage
   let gaps = getAllGapsAllDay tzo coverage events
-  sendSmsToRole AnnexRole contacts (((annexName <> " Schedule:\n") <>) $ fump $ (fmap . fmap . fmap) internToLocal gaps)
+  sendSmsToRole AnnexRole contacts $ ((annexName <> " Schedule:\n") <>) $ renderGaps gaps
   where
     isEndOfWeek = (== weekStart) . getWeekDay . nextDate . HG.localTimeUnwrap
+
+renderGaps :: Gaps [Period InternTime] -> Text
+renderGaps = toText . (fmap . fmap . fmap) internToLocal
 
 annexEmergencySMS :: IO ()
 annexEmergencySMS = do
@@ -952,50 +1140,21 @@ annexEmergencySMS = do
   let gaps = getAllGapsAllDay tzo coverage events
   if not . null . runGaps $ gaps
     then let preMsg = annexName <> " events not staffed tomorrow!:\n"
-             msg = fump $ (fmap . fmap . fmap) internToLocal gaps
+             msg = renderGaps gaps
          in
            (print (annexName <> ": sending emergency alert to: " <> (pack . show $ contacts)))
             >> (sendSmsToRole AnnexRole contacts $ preMsg <> msg)
     else print (annexName <> ": no gaps tomorrow" :: Text)
 
--- TODO: rename
-dump = renderStrict . layoutPretty defaultLayoutOptions
+textRender = renderStrict . layoutPretty defaultLayoutOptions
 
--- TODO: rename this shit
-fump :: Pretty a => a -> Text
-fump = dump . pretty
+toText :: Pretty a => a -> Text
+toText = textRender . pretty
 
 -- TODO: remove this (it was just here for debugging)
 -- TODO: Replace with test of Pretty instace for gaps
 displayGaps :: Gaps [Period (DisplayTZ (LocalTime HG.Elapsed))] -> Text
-displayGaps = fump
-
--- testGapAlert :: Int -> Int -> IO ()
--- testGapAlert from to = do
---   let tzo = localOffset
---       startDate = DateTime (Date { dateDay = from, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 0 0 0 0
---       endDate = DateTime (Date { dateDay = to, dateMonth = October, dateYear = 2018 }) $ TimeOfDay 23 58 58 0
---       start = Start $ internTimeFromLocalOffset startDate
---       end = End $ internTimeFromLocalOffset endDate
---   sched <- loadShifts
---   rawEvents <- getEvents (start, end)
---   events <- validateGCalEvent' `traverse` rawEvents
---   let gaps = getAllGapsInRange tzo sched (start, end) events
---   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
-
--- TODO: extract and test more of this logic
--- testGapsTomorrowAlert :: IO ()
--- testGapsTomorrowAlert = do
---   tomorrow <- getTomorrow
---   let tzo = localOffset
---       tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
---       start = Start $ getInternTime' tomorrow
---       end = End $ getInternTime' tomorrowEOD
---   sched <- loadShifts
---   rawEvents <- getEvents (start, end)
---   events <- validateGCalEvent' `traverse` rawEvents
---   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
---   print $ pretty $ (fmap . fmap . fmap) internToLocal gaps
+displayGaps = toText
 
 -- this should eventually be in a state monad
 getToday :: IO (LocalTime Date)
@@ -1023,12 +1182,6 @@ getTomorrow = (fmap . fmap) nextDate $ getToday
 -- summaryDurationsInRange :: StartTime -> EndTime -> IO [(Text, Hours, Minutes)]
 -- summaryDurationsInRange s e = eventBySummDuration <$> eventsInRange s e
 
--- ensure that we convert to correct TZ for display purposes
-newtype DisplayTZ a = DisplayTZ { runDTZ :: a } deriving (Functor, Eq, Show)
-
--- track that number is a date for display
-newtype DisplayDate a = DisplayDate { runDD :: a } deriving (Functor)
-
 displayTZ :: (HG.Time a) => TimezoneOffset -> LocalTime a -> DisplayTZ (LocalTime a)
 displayTZ tz = DisplayTZ . HG.localTimeSetTimezone tz
 
@@ -1038,148 +1191,16 @@ internToDisplay tz = DisplayTZ . HG.localTimeSetTimezone tz . runIntern
 internToLocal :: InternTime -> DisplayTZ (LocalTime HG.Elapsed)
 internToLocal = internToDisplay localOffset
 
-type IxGaps a = Map Int (Period a)
-
 indexGaps :: Gaps [Period a] -> IxGaps a
 indexGaps (Gaps ps) = fst $ foldl' addIx (Map.empty, 1) ps
   where
     addIx (m, i) p = (Map.insert i p m, i + 1)
-
-instance Pretty (IxGaps (DisplayTZ (LocalTime HG.Elapsed))) where --TODO: handle empty
-  pretty im = vsep $ fmap prettyIx $ Map.toList im
-    where
-      prettyIx (i, p) = pretty i <> ":" <+> pretty p
-
-instance (Pretty a) => Pretty (Gaps [a]) where
-  pretty (Gaps []) = "All shifts covered this week!"
-  pretty (Gaps a) = vsep $ ["Open shifts: "]
-                            <> fmap pretty a
-
-instance Pretty (Period (DisplayTZ (LocalTime HG.Elapsed))) where
-  pretty (Period s _ (Just name)) = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty name
-  pretty (Period s e Nothing)     = pretty ((internToDate <$> HG.localTimeGetTimezone <*> Intern) <$> s) <+> pretty s
-                                    <+> "to" <+> pretty e
-
-instance Pretty (DisplayTZ Date) where
-  pretty d = pretty  (getWeekDay <$> d)
-
-instance Pretty (DisplayMonthDate (DisplayTZ (LocalTime Date))) where
-  pretty (DisplayMonthDate d) =
-    pretty (Concise $ dateMonth . HG.localTimeUnwrap <$> d)
-    <+> pretty (DisplayDate . dateDay . HG.localTimeUnwrap <$> d)
-
-
-instance Pretty (DisplayTZ (LocalTime Date)) where
-  pretty = pretty . fmap HG.localTimeUnwrap
-
-instance Pretty (DisplayTZ WeekDay) where
-  pretty (DisplayTZ Monday)    = "Mon"
-  pretty (DisplayTZ Tuesday)   = "Tue"
-  pretty (DisplayTZ Wednesday) = "Wed"
-  pretty (DisplayTZ Thursday)  = "Thu"
-  pretty (DisplayTZ Friday)    = "Fri"
-  pretty (DisplayTZ Saturday)  = "Sat"
-  pretty (DisplayTZ Sunday)    = "Sun"
-
-instance Pretty (DisplayTZ (DisplayDate Int)) where
-  pretty (DisplayTZ (DisplayDate a)) = pretty $ format int a
-
-instance Pretty (DisplayTZ (LocalTime HG.Elapsed)) where
-  pretty (DisplayTZ e) =
-    pretty $ DisplayTZ $ toTime e
-    where
-      toTime = dtTime . HG.timeGetDateTimeOfDay . HG.localTimeUnwrap
-
-  -- TODO: clean up
-instance Pretty (DisplayTZ TimeOfDay) where
-  pretty (DisplayTZ t) = do
-    let formattedTime =
-          if minutes == 0
-          then format (FMT.int ) hoursFmt
-          else format (FMT.int % ":" % left 2 '0' ) hoursFmt minutes
-
-    pretty $ formattedTime
-
-    where
-      hoursFmt = if (todHour t) <= 12
-             then (\(Hours a) -> a) (todHour t)
-             else (\(Hours a) -> a) (todHour t) - 12
-
-      minutes = (\(Minutes a) -> a) (todMin t)
-
-      -- meridian = if (todHour t) < 12
-      --            then "AM"
-      --            else "PM"
-
-instance Pretty (Concise (DisplayTZ Month)) where
-  pretty (Concise (DisplayTZ January))  = "Jan"
-  pretty (Concise (DisplayTZ February)) = "Feb"
-  pretty (Concise (DisplayTZ March))    = "Mar"
-  pretty (Concise (DisplayTZ April))    = "Apr"
-  pretty (Concise (DisplayTZ May))      = "May"
-  pretty (Concise (DisplayTZ June))     = "Jun"
-  pretty (Concise (DisplayTZ July))     = "Jul"
-  pretty (Concise (DisplayTZ August))   = "Aug"
-  pretty (Concise (DisplayTZ September))= "Sep"
-  pretty (Concise (DisplayTZ October))  = "Oct"
-  pretty (Concise (DisplayTZ November)) = "Nov"
-  pretty (Concise (DisplayTZ December)) = "Dec"
-
-newtype Concise a = Concise a
-
-getInternTime :: Timeable t => TimezoneOffset -> t -> InternTime
-getInternTime currentTZ =
-  Intern
-  . HG.localTimeSetTimezone utcOffset
-  . HG.localTime currentTZ
-  . HG.timeGetElapsed
-
-getInternTime' :: Timeable t => LocalTime t -> InternTime
-getInternTime' lt =
-  getInternTime (HG.localTimeGetTimezone lt) $ HG.localTimeUnwrap lt
-
-internTimeFromUTC :: Timeable t => t -> InternTime
-internTimeFromUTC = getInternTime utcOffset
-
-internTimeFromLocalOffset :: Timeable t => t -> InternTime
-internTimeFromLocalOffset = getInternTime localOffset
-
-utcOffset :: TimezoneOffset
-utcOffset = TimezoneOffset $ timezoneOffset UTC
-
--- I'm assuming that this correctly handles the timezone
-parse8601 :: ISO8601 Text -> Either ISO8601Error InternTime
-parse8601 (ISO8601 s) =
-  toEither maybeIntern
-  where
-    toEither = maybe (Left . ISO8601Error $ unpack s) Right
-    maybeIntern = internTimeFromUTC . HG.timeGetElapsed
-                  <$> HG.timeParse ISO8601_DateAndTime (unpack s)
-
-show8601 :: TimezoneOffset -> InternTime -> Text
-show8601 tzo = pack
-  . HG.localTimePrint ISO8601_DateAndTime
-  . HG.localTimeSetTimezone tzo
-  . runIntern
-
-show8601UTC :: InternTime -> Text
-show8601UTC =  show8601 utcOffset
-
-show8601Local :: InternTime -> Text
-show8601Local = show8601 localOffset
 
 internToDateTime :: TimezoneOffset -> InternTime -> DateTime
 internToDateTime tzo = timeGetDateTimeOfDay . HG.localTimeUnwrap . HG.localTimeSetTimezone tzo . runIntern
 
 internToDate :: TimezoneOffset -> InternTime -> Date
 internToDate tzo = dtDate . internToDateTime tzo
-
--- these are making timeGetTimeOfDay always evaulate in UTC, which is misleading
--- instance Timeable (LocalTime HG.Elapsed) where
---   timeGetElapsedP = HG.localTimeToGlobal . (flip HG.ElapsedP 0 <$>)
-
--- instance Timeable InternTime where
---   timeGetElapsedP = HG.timeGetElapsedP . runIntern
 
 periodDuration :: PeriodIntern -> (Minutes, HG.Seconds)
 periodDuration a = fromSeconds $ timeDiff (inUTC . periodEnd $ a) (inUTC . periodStart $ a)
@@ -1190,7 +1211,6 @@ eventDuration :: GCalEventI -> (Minutes, HG.Seconds)
 eventDuration a = fromSeconds $ timeDiff (inUTC . gCalEnd $ a) (inUTC . gCalStart $ a)
     where
     inUTC = HG.localTimeUnwrap . runIntern
-
 
 totalDuration :: Foldable f => f GCalEventI -> (Minutes, HG.Seconds)
 totalDuration = foldr sumMS (0,0)
@@ -1228,76 +1248,11 @@ toHours m s =
   in
     (hours, mins)
 
-data TwilioCallResponse = TCallResp Text
-data TwilioMsgResponse = TMsgResp Text
-
-instance ToXml TwilioCallResponse where
-  toXml (TCallResp a) =
-    [
-      element' "Response" HMap.empty
-      [
-        element' "Say" (HMap.fromList [("voice", "woman")]) ([text a])
-      ]
-    ]
-
-instance ToXml TwilioMsgResponse where
-  toXml (TMsgResp a) =
-    [
-      element' "Response" HMap.empty
-      [
-        element' "Message" HMap.empty ([text a])
-      ]
-    ]
-
-data TwilioMsgData = TMsgData {
-    msgBody :: Text
-  , msgFrom :: Text
-  , msgTo :: Text
-  }
-  deriving Show
-
-data TwilioCallData = TCallData {
-    callFrom :: Text
-  , callTo :: Text
-  }
-  deriving Show
-
-instance FromForm TwilioMsgData where
-  fromForm = handleErr . maybeTData
-    where
-      maybeTData :: Form -> Maybe TwilioMsgData
-      maybeTData f = do
-        let m = unForm f
-        body <- HMap.lookup "Body" m
-        from <- HMap.lookup "From" m
-        to   <- HMap.lookup "To"   m
-        pure $ TMsgData (head body) (head from) (head to)
-
-      handleErr = maybe (Left "Failure parsing twilio message form-data") Right
-
-instance FromForm TwilioCallData where
-  fromForm = handleErr . maybeTData
-    where
-      maybeTData :: Form -> Maybe TwilioCallData
-      maybeTData f = do
-        let m = unForm f
-        from <- HMap.lookup "From" m
-        to   <- HMap.lookup "To"   m
-        pure $ TCallData (head from) (head to)
-
-      handleErr = maybe (Left "Failure parsing twilio call form-data") Right
-
 type API = "sms" :> Header "Cookie" Cookies
                  :> ReqBody '[FormUrlEncoded] TwilioMsgData
                  :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
       :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData
                   :> Post '[XML] TwilioCallResponse
-
-twimlCall :: Text -> TwilioCallResponse
-twimlCall = TCallResp
-
-twimlMsg :: Text -> TwilioMsgResponse
-twimlMsg = TMsgResp
 
 server :: Server API
 server = twilMsg
@@ -1322,8 +1277,11 @@ server = twilMsg
     twilCall :: TwilioCallData -> Handler TwilioCallResponse
     twilCall inMsg = liftIO (print inMsg) >> pure (twimlCall bob)
 
-type CookiesMap = Map ByteString BSL.ByteString
-type ShiftSelectMap = Map Int PeriodIntern
+twimlCall :: Text -> TwilioCallResponse
+twimlCall = TCallResp
+
+twimlMsg :: Text -> TwilioMsgResponse
+twimlMsg = TMsgResp
 
 isClaimShift :: TwilioMsgData -> CookiesMap -> Maybe PeriodIntern
 isClaimShift d cm = do
@@ -1331,18 +1289,6 @@ isClaimShift d cm = do
   shiftmap <- decode . BSL.fromStrict $ URI.decodeByteString . BSL.toStrict $ json :: Maybe ShiftSelectMap
   selected <- Map.lookup <$> (readMaybe . unpack . msgBody $ d) <*> pure shiftmap
   selected
-
-instance FromJSON InternTime where
-  parseJSON = withText "InternTime" $ \txt ->
-    either (fail . show) pure $ parse8601 $ ISO8601 txt
-
-data Cmd =
-    AvailableShifts
-  | ClaimShift Contact (Period InternTime)
-  | Suspend Contact (Days Int)
-  | Help
-  | UnrecognizedNumber
-  | UnrecognizedCmd TwilioMsgData
 
 getCmd :: InternTime -> TwilioMsgData -> Contact -> Maybe CookiesMap -> Cmd
 
@@ -1377,19 +1323,23 @@ performCmd AvailableShifts = do
   pure
     $ addAvailableshiftsCookie
     gaps
-    (twimlMsg . (preMsg <>) . fump . (fmap . fmap) internToLocal $ gaps)
+    (twimlMsg . (preMsg <>) . toText . (fmap . fmap) internToLocal $ gaps)
 
 performCmd UnrecognizedNumber = do
   pure $ destroyCookie $ twimlMsg ""
 
 performCmd (ClaimShift contact period) = do
   calId <- liftIO getMainLocCalId
-  mEvents <- liftIO $ (fmap . fmap) validateGCalEvent $ getEventsForCal calId ((Start $ periodStart period), (End $ periodEnd period))
-  let available = not <$> (hasOverlap <$> (sequence mEvents) <*> pure (mkGCalEvent period ""))
+  mEvents <- liftIO $ (fmap . fmap) validateGCalEvent
+                    $ getEventsForCal calId
+                     ((Start $ periodStart period), (End $ periodEnd period))
+  let available = not
+                  <$> (hasOverlap <$> (sequence mEvents)
+                                  <*> pure (mkGCalEvent period ""))
   case available of
     Right True ->
       liftIO $ print <$> postEvent (mkGCalEvent period (contactName contact))
-      >> (pure $ destroyCookie $ twimlMsg $ "Shift claimed: " <> (fump $ internToLocal <$> period))
+      >> (pure $ destroyCookie $ twimlMsg $ "Shift claimed: " <> (toText $ internToLocal <$> period))
     _ ->
       pure $ destroyCookie $ twimlMsg $ "That shift is no longer available. :( Try again."
 
@@ -1399,12 +1349,11 @@ performCmd (Suspend c d) = do
       msg = pretty ("Notifications silenced until: " :: Text)
             <> (pretty . DisplayMonthDate . displayTZ localOffset $ until)
   liftIO $ suspendContact c $ getInternTime' until
-  pure $ destroyCookie $ twimlMsg $ dump $ msg
+  pure $ destroyCookie $ twimlMsg $ textRender $ msg
 
 performCmd Help =
-  pure $ destroyCookie $ twimlMsg $ dump $ pretty helpText
+  pure $ destroyCookie $ twimlMsg $ toText helpText
 
-newtype DisplayMonthDate a = DisplayMonthDate a
 
 suspendContact :: Contact -> InternTime -> IO ()
 suspendContact c t = do
@@ -1416,8 +1365,6 @@ suspendContact c t = do
 
 writeContacts :: [Contact] -> IO ()
 writeContacts cs = flip encodeFile cs . (<> "/contacts.yml") =<< configDir
-
-newtype Days a = Days a deriving (Show, Eq)
 
 mkGCalEvent :: PeriodIntern -> Text -> GCalEventI
 mkGCalEvent p summ = GCalEvent (Just summ) botText (periodStart p) (periodEnd p)
@@ -1472,9 +1419,6 @@ contactsAPI = Proxy
 app :: Application
 app = serve contactsAPI server
 
-instance FromHttpApiData Cookies where
-   parseHeader = Right . parseCookies
-
 startServer :: IO ()
 startServer = do
   withStdoutLogger $ \appLogger -> do
@@ -1484,20 +1428,6 @@ startServer = do
 -- -- type ApacheLogger = Request -> Status -> Maybe Integer -> IO ()
 -- Use this to log all request headers
 logHeaders logger req s i = print (requestHeaders req) >> logger req s i
-
--- thisWeekGaps :: IO (Gaps [Period InternTime])
--- thisWeekGaps = do
---   today <- getToday
---   let
---     todayTZ = HG.localTimeGetTimezone today
---     (_, endDate) = weekOf $ HG.localTimeUnwrap today
---     endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
---     start = getInternTime' <$> Start today
---     end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
---   sched <- loadShifts
---   rawEvents <- getEvents (start, end)
---   events <- validateGCalEvent' `traverse` rawEvents
---   pure $ getMinGapsInRange minGapDuration sched (start, end) events
 
 gapsNowTo :: Days Int -> IO (Gaps [Period InternTime])
 gapsNowTo d = do
