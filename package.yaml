@@ -51,6 +51,7 @@ library:
   - wai-logger
   - wai
   - warp
+  - QuickCheck
   - http-api-data
   source-dirs: library
 
