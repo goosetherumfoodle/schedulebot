@@ -1042,10 +1042,10 @@ nagAlert = do
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
       toNag = whomToNag events contacts
   if null . runGaps $ gaps
-    then pure () -- send no alerts if there are no gaps
-    else foldr (msgLaxContacts gaps) (pure ()) toNag
+    then print "NAGGING: Nobody, as no gaps were found" -- send no alerts if there are no gaps
+    else mapM_ (msgLaxContacts gaps) toNag
   where
-      msgLaxContacts gaps c _ =
+      msgLaxContacts gaps c =
         let name = contactName . runActive $ c
             gapMsg = renderGaps gaps
             preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
