@@ -873,7 +873,7 @@ sunday:
                       , Period monStart monEnd Nothing
                       ]
 
-          expectedOutput = "Open shifts: \n[Sun 4 6AM to 11:15PM\n, Mon 5 12:50PM to 6:15PM]\nRespond with \"shifts\" to claim one right now"
+          expectedOutput = "Open shifts: \nSun 6 to 11:15\nMon 12:50 to 6:15"
       displayGaps gaps `shouldBe` expectedOutput
 
   describe "selecting which staffers to nag" $ do

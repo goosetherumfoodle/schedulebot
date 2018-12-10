@@ -614,7 +614,7 @@ unwrapEvents (Just (Success events)) = pure events
 unwrapEvents err = throwIO $ ResponseErrorGCalEvents $ show err
 
 localOffset :: TimezoneOffset
-localOffset = TimezoneOffset (-240)
+localOffset = TimezoneOffset (-300)
 
 getInternTime :: Timeable t => TimezoneOffset -> t -> InternTime
 getInternTime currentTZ =
@@ -680,7 +680,7 @@ getEventsForCal (CalId cid) ((Start start), (End end)) = do
 
 postEvent e = do
   loadEnv
-  calId <- getEnv "GCAL_ID"
+  calId <- getEnv "MAIN_LOC_STAFFING_GCAL_ID"
   token <- getAuthToken =<< googleJWT
   resp <- postWith (defaults & auth ?~ oauth2Bearer token) (url calId) (toJSON e)
   return resp
@@ -1047,10 +1047,10 @@ nagAlert = do
   where
       msgLaxContacts gaps c _ =
         let name = contactName . runActive $ c
-            gapMsg = pack $ show $ renderGaps gaps
+            gapMsg = renderGaps gaps
             preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
             postMsg = "\nRespond with \"shifts\" to claim one right now"
-        in print ("couldn't find " <> name <> " on cal")
+        in print ("\nNAGGING:  " <> name)
            >> sendSmsToRole WeeklyRole [c] (preMsg <> gapMsg <> postMsg)
 
 whomToNag :: [GCalEventI] -> [Active Contact] -> [Active Contact]
