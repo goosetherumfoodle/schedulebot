@@ -76,7 +76,7 @@ import qualified Data.Set as Set
 import Text.RawString.QQ (r)
 import Data.List (foldl', find)
 import qualified Network.URI.Encode as URI
-import Xmlbf (ToXml(..), element', text)
+import Xmlbf (ToXml(..), element, text)
 import Web.Cookie
 import Web.HttpApiData -- (ToHttpApiData(..))
 import qualified Data.HashMap.Strict as HMap
@@ -106,6 +106,7 @@ import Text.Read (readMaybe)
 import qualified Data.Hourglass as HG
 import Data.Text (Text, toLower, strip, pack, replace, unpack)
 import qualified Data.Text as Text
+import qualified Data.Text.Lazy as LText
 import Data.Text.Encoding (encodeUtf8)
 import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
 import Control.Lens (Identity, preview, (?~), (&), (^?), (.~))
@@ -311,21 +312,14 @@ instance FromJSON InternTime where
 
 instance ToXml TwilioCallResponse where
   toXml (TCallResp a) =
-    [
-      element' "Response" HMap.empty
-      [
-        element' "Say" (HMap.fromList [("voice", "woman")]) ([text a])
-      ]
-    ]
+      element "Response" HMap.empty $
+        element "Say" (HMap.fromList [("voice", "woman")]) (text . LText.fromStrict $ a)
 
 instance ToXml TwilioMsgResponse where
   toXml (TMsgResp a) =
-    [
-      element' "Response" HMap.empty
-      [
-        element' "Message" HMap.empty ([text a])
-      ]
-    ]
+      element "Response" HMap.empty $
+        element "Message" HMap.empty (text . LText.fromStrict $ a)
+
 
 instance FromForm TwilioMsgData where
   fromForm = handleErr . maybeTData
@@ -914,7 +908,7 @@ sendSmsTo cs msg = do
   print =<< traverse (msgEach twilSid twilAuth msg from . unpack . contactNumber) activeContacts
   where
     msgEach sid au msg' from num = runTwilio' (pure sid) (pure au) $ do
-      resp <- TWIL.post $ PostMessage (pack num) from msg'
+      resp <- TWIL.post $ PostMessage (pack num) from msg' Nothing
       pure resp
 
 sendSms :: Text -> IO ()
@@ -923,7 +917,7 @@ sendSms msg = do
   to <- pack <$> getEnv "TO_NUMBER"
   from <- pack <$> getEnv "FROM_NUMBER"
   runTwilio' (getEnv "TWILIO_ACCT_SID") (getEnv "TWILIO_AUTH_TOKEN") $ do
-    resp <- TWIL.post $ PostMessage to from msg
+    resp <- TWIL.post $ PostMessage to from msg Nothing
     liftIO $ print resp
 
 loadContacts :: IO [Contact]
