@@ -10,3 +10,4 @@
 **/.dir-locals.el
 /result
 /.stack-work/
+/config/call_responses.yml
