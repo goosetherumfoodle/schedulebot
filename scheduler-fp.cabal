@@ -1,0 +1,207 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.3.
+--
+-- see: https://github.com/sol/hpack
+
+name:           scheduler-fp
+version:        0.0.0
+homepage:       https://github.com/goosetherumfoodle/scheduler-fp#readme
+bug-reports:    https://github.com/goosetherumfoodle/scheduler-fp/issues
+author:         Jesse Hanley
+maintainer:     Jesse Hanley
+license:        AGPL-3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    CHANGELOG.md
+    LICENSE
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/goosetherumfoodle/scheduler-fp
+
+library
+  exposed-modules:
+      Example
+  other-modules:
+      Paths_scheduler_fp
+  hs-source-dirs:
+      library
+  ghc-options: -Wall
+  build-depends:
+      QuickCheck
+    , aeson
+    , base
+    , bytestring
+    , containers
+    , cookie
+    , formatting
+    , google-oauth2-jwt
+    , hourglass
+    , http-api-data
+    , http-types
+    , lens
+    , lens-aeson
+    , load-env
+    , parsec
+    , prettyprinter
+    , raw-strings-qq
+    , servant-server
+    , servant-xml
+    , text
+    , twilio
+    , unordered-containers
+    , uri-encode
+    , vector
+    , wai
+    , wai-logger
+    , warp
+    , wreq
+    , xmlbf
+    , yaml
+  default-language: Haskell2010
+
+executable alert-annex-emergency
+  main-is: Alert/AnnexEmergency.hs
+  other-modules:
+      Alert.AnnexWeek
+      Alert.Emergency
+      Alert.Nag
+      Alert.Week
+      MainServer
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is Alert.AnnexEmergency -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+executable alert-annex-week
+  main-is: Alert/AnnexWeek.hs
+  other-modules:
+      Alert.AnnexEmergency
+      Alert.Emergency
+      Alert.Nag
+      Alert.Week
+      MainServer
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is Alert.AnnexWeek -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+executable alert-emergency
+  main-is: Alert/Emergency.hs
+  other-modules:
+      Alert.AnnexEmergency
+      Alert.AnnexWeek
+      Alert.Nag
+      Alert.Week
+      MainServer
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is Alert.Emergency -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+executable alert-nag
+  main-is: Alert/Nag.hs
+  other-modules:
+      Alert.AnnexEmergency
+      Alert.AnnexWeek
+      Alert.Emergency
+      Alert.Week
+      MainServer
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is Alert.Nag -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+executable alert-week
+  main-is: Alert/Week.hs
+  other-modules:
+      Alert.AnnexEmergency
+      Alert.AnnexWeek
+      Alert.Emergency
+      Alert.Nag
+      MainServer
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is Alert.Week -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+executable server
+  main-is: MainServer.hs
+  other-modules:
+      Alert.AnnexEmergency
+      Alert.AnnexWeek
+      Alert.Emergency
+      Alert.Nag
+      Alert.Week
+      Paths_scheduler_fp
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -main-is MainServer -O2 -rtsopts -threaded -with-rtsopts=-N
+  split-sections: true
+  build-depends:
+      base
+    , scheduler-fp
+  default-language: Haskell2010
+
+test-suite scheduler-fp-test-suite
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_scheduler_fp
+  hs-source-dirs:
+      test-suite
+  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      aeson
+    , base
+    , containers
+    , hourglass
+    , raw-strings-qq
+    , scheduler-fp
+    , tasty
+    , tasty-hspec
+    , text
+    , yaml
+  default-language: Haskell2010
+
+benchmark scheduler-fp-benchmarks
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_scheduler_fp
+  hs-source-dirs:
+      benchmark
+  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , criterion
+    , scheduler-fp
+  default-language: Haskell2010

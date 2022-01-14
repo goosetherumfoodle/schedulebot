@@ -1,0 +1,5 @@
+- name: horse
+  number: '+132323'
+  suspendUntil: Null
+  id: 1
+  roles: ['weekly']

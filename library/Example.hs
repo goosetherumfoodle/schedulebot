@@ -457,11 +457,11 @@ instance FromJSON RawShiftTime where
             errHandler (Right a) = pure a
             errHandler (Left err) = fail $ "Error parsing hours: " <> show err
 
-            readHours :: Monad m => String -> m Int64
+            readHours :: MonadFail m => String -> m Int64
             readHours hrs | Just hrsParsed <- readMaybe hrs = pure hrsParsed
                           | otherwise = fail $ "Couldn't parse hours"
 
-            readMinutes :: Monad m => String -> m Int64
+            readMinutes :: MonadFail m => String -> m Int64
             readMinutes mins | Just minsParsed <- readMaybe mins = pure minsParsed
                              | otherwise = fail $ "Couldn't parse minutes"
 
@@ -724,7 +724,7 @@ parseSuspendDays t = handler $ parse suspendDaysParser "suspendDays" (toLower t)
     handler = either (const Nothing) id
 
 parseHelp :: Text -> Bool
-parseHelp t = handler $ parse helpParser "Help" (toLower t)
+parseHelp t = handler $ parse helpParser "Info" (toLower t)
   where
     handler = either (const False) (const True)
 

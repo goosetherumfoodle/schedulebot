@@ -1,0 +1,6 @@
+
+0 17 * * 0  BASH_ENV=/apps/schedulebot-bins/config/env bash -c "/apps/schedulebot-bins/bin/alert-week"
+
+0 17 * * *  BASH_ENV=/apps/schedulebot-bins/config/env bash -c "/apps/schedulebot-bins/bin/alert-nag"
+
+0 23 * * * BASH_ENV=/apps/schedulebot-bins/config/env bash -c "/apps/schedulebot-bins/bin/alert-emergency"
