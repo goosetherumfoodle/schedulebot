@@ -69,7 +69,12 @@ module Example where
 
 import Prelude hiding (until)
 
+import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
+import Control.Monad.STM (atomically)
 import Test.QuickCheck (generate, elements)
+-- import Control.Monad.Trans.RWS.CPS (ask)
+-- import Control.Monad.Trans.State.Strict (StateT(..), get, put)
+import Control.Monad.Trans.Reader (ReaderT(..), ask)
 import Data.Foldable (asum)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -82,7 +87,7 @@ import Web.HttpApiData -- (ToHttpApiData(..))
 import qualified Data.HashMap.Strict as HMap
 import Servant.XML
 import Web.Internal.FormUrlEncoded (Form, unForm, FromForm(..))
-import Servant.Server (Server)
+import Servant.Server (ServerT)
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (setLogger, setPort, runSettings, defaultSettings)
 import Network.Wai.Logger (withStdoutLogger)
@@ -126,6 +131,7 @@ import Servant ( Handler
                , ReqBody
                , Application
                , Proxy(..)
+               , hoistServer
                , addHeader
                , serve
                , (:>)
@@ -235,6 +241,7 @@ data Cmd =
   | Help
   | UnrecognizedNumber
   | UnrecognizedCmd TwilioMsgData
+  | SMSResponse Text
 
 data TwilioCallResponse = TCallResp Text
 data TwilioMsgResponse = TMsgResp Text
@@ -1248,13 +1255,17 @@ type API = "sms" :> Header "Cookie" Cookies
                  :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
       :<|> "call" :> ReqBody '[FormUrlEncoded] TwilioCallData
                   :> Post '[XML] TwilioCallResponse
+      :<|> "backTalk" :> Header "Cookie" Cookies
+                      :> ReqBody '[FormUrlEncoded] TwilioMsgData
+                      :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
 
-server :: Server API
+server :: ServerT API AppM
 server = twilMsg
     :<|> twilCall
+    :<|> backTalkMsg
 
   where
-    twilMsg :: Maybe Cookies -> TwilioMsgData -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+    twilMsg :: Maybe Cookies -> TwilioMsgData -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     twilMsg cookies inMsg = do
       liftIO loadEnv
       contacts <- liftIO loadContacts
@@ -1269,12 +1280,19 @@ server = twilMsg
           liftIO $ print ("Unrecognized number\n" :: Text)
           performCmd UnrecognizedNumber
 
-    twilCall :: TwilioCallData -> Handler TwilioCallResponse
+    twilCall :: TwilioCallData -> ReaderT AppState Handler TwilioCallResponse
     twilCall inMsg = do
       liftIO (print inMsg)
       responses <- liftIO loadCallResponse
       response <- liftIO $ randItem responses
       liftIO . pure . twimlCall $ response
+
+    backTalkMsg :: Maybe Cookies -> TwilioMsgData -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+    backTalkMsg _ msg = do
+      state <- ask
+      storedMsg <- liftIO . atomically $ readTVar state
+      liftIO . atomically $ writeTVar state (msgBody msg)
+      performCmd $ SMSResponse storedMsg
 
 twimlCall :: Text -> TwilioCallResponse
 twimlCall = TCallResp
@@ -1311,7 +1329,9 @@ daysUntilIter :: Int -> Date -> WeekDay -> Int
 daysUntilIter counter day end | (getWeekDay day) == end = counter
                               | otherwise = daysUntilIter (counter + 1) (nextDate day) end
 
-performCmd :: Cmd -> Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+performCmd :: Cmd -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+
+performCmd (SMSResponse msg) = pure $ destroyCookie $ twimlMsg msg
 
 performCmd (UnrecognizedCmd d) =
   pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
@@ -1415,14 +1435,56 @@ contactsAPI = Proxy
 -- 'serve' comes from servant and hands you a WAI Application,
 -- which you can think of as an "abstract" web application,
 -- not yet a webserver.
-app :: Application
-app = serve contactsAPI server
+-- app :: Config -> Application
+-- app c = serve contactsAPI server
+
+-- app :: Config -> Application
+-- app cfg = serve api' (readerServer cfg)
+
+
+-- data Config = Config { appState :: TVar Text }
+-- https://stackoverflow.com/questions/38145566/servant-always-give-me-a-initial-value-in-readert-monad
+
+-- main :: IO ()
+-- main = do
+--   services <- atomically (newTVar M.empty)
+--   run 8080 $ serve Proxy (server services)
+
+-- server :: TVar Services -> Server Api
+-- server services = enter (readerToHandler services) serverT
+
+-- getService :: LocalHandler (Maybe MicroService)
+-- getService = do
+--   services <- ask
+--   liftIO . atomically $ do
+--     mss <- readTVar services
+--     ...
+
+--- from master:
+-- type AppM = StateT AppState Handler
+
+-- getHandler :: AppState -> AppM a -> Handler a
+-- getHandler s x = (fmap fst) $ runStateT x s
+
+-- app :: AppState -> Application
+-- app s = serve contactsAPI $ hoistServer contactsAPI (getHandler s) server
+
+ -- ReaderT Config (StateT LoggedUsers (ExceptT ServantErr IO))
+type AppM = ReaderT AppState Handler
+type AppState = TVar Text
+
+getHandler :: AppState -> AppM a -> Handler a
+getHandler = flip runReaderT
+
+mkserver :: AppState -> Application
+mkserver s = serve contactsAPI $ hoistServer contactsAPI (getHandler s) server
 
 startServer :: IO ()
 startServer = do
   withStdoutLogger $ \appLogger -> do
+    state <- atomically $ newTVar "hello world!"
     let settings = setPort 3000 $ setLogger (logHeaders appLogger) defaultSettings
-    runSettings settings app
+    (runSettings $  settings) (mkserver state)
 
 -- -- type ApacheLogger = Request -> Status -> Maybe Integer -> IO ()
 -- Use this to log all request headers
