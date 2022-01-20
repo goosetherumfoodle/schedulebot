@@ -14,6 +14,7 @@ nix-shell --run "cabal test"
 - [ ] better in-server documentation
 - [ ] document functionality in readme
 - [ ] use phone number as ID
+- [ ] organize modules
 - [ ] improve cmd matching
 - [ ] improve handling for all-day events (recognize and toss)
 - [ ] handle DST
