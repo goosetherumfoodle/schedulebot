@@ -1,55 +1,58 @@
 # [scheduler-fp][]
 
-building with stack:
+# building
 ```sh
-nix-shell -p stack -p libiconv -p zlib -p gmp -p openssl -p cabal-install
-...
-stack install
+nix-build
+```
+# running tests
+```sh
+nix-shell --run "cabal test"
 ```
 
-Thanks for starting a project with Haskeleton! If you haven't heard of it
-before, I suggest reading the introductory blog post. You can find it here:
-<http://taylor.fausak.me/2014/03/04/haskeleton-a-haskell-project-skeleton/>.
+# todos
+- [ ] remove annex related code
+- [ ] better in-server documentation
+- [ ] document functionality in readme
+- [ ] use phone number as ID
+- [ ] improve cmd matching
+- [ ] improve handling for all-day events (recognize and toss)
+- [ ] handle DST
+- [ ] limit max suspension days
+- [ ] task for verifying env vars and config files
+- [ ] split <say> nodes into <gather> parent
+- [ ] consider switching to megaparsec
+- [ ] announcement command
+- [ ] error logging/reporting
+- [ ] handle DST and read TZ from config file
+- [ ] push env vars (and other?) into State monad
+- [ ] only create gauth token when old one expires
+- [x] write alerts for annex location
+- [x] user roles
+- [x] alert messages filter by corresponding roles
+- [x] suspend response should show month
+- [x] default suspension days if no number specified
+- [x] "commands" (help) command
+- [x] test task for who will be msged by nagger
+- [x] deployment
+- [x] cron tasks
+- [x] expose notification tasks
+- [x] tasks leave alone suspended users
+- [x] fix adding extra contacts on write
+- [x] "shifts" should look at next 7 days
+- [x] suspensions
+- [x] post exlusivly (not if another event exists)
+- [x] claim gcal shifts
+- [x] fixz correspondance between shift select map and displayed shifts
+- [x] implement twilio msg conversation
+- [x] capture twilio cookies
+- [x] destroying cookies
+- [x] set twilio cookies
+- [x] api endpoint and msg response
+- [x] contacts in yaml
+- [x] emergency msg
+- [x] daily nag msg
+- [x] fix msg formatting
 
-Before you get started, there are a few things that this template couldn't
-provide for you. You should:
 
--   Add a synopsis to `package.yaml`. It should be a short (one sentence)
-    explanation of your project.
-
--   Add a description to `package.yaml`. This can be whatever you want it to
-    be.
-
--   Add a category to `package.yaml`. A list of categories is available on
-    Hackage at <http://hackage.haskell.org/packages>.
-
--   Rename `library/Example.hs` to whatever you want your top-level module to
-    be called. Typically this is the same as your package name but in
-    `CamelCase` instead of `kebab-case`.
-
-    -   Don't forget to rename the reference to it in
-        `executable/Main.hs`!
-
--   If you are on an older version of Stack (<1.0.4), delete `package.yaml` and
-    remove `/*.cabal` from your `.gitignore`.
-
-Once you've done that, start working on your project with the Stack commands
-you know and love.
-
-``` sh
-# Build the project.
-stack build
-
-# Run the test suite.
-stack test
-
-# Run the benchmarks.
-stack bench
-
-# Generate documentation.
-stack haddock
-```
-
-Thanks again, and happy hacking!
 
 [scheduler-fp]: https://github.com/goosetherumfoodle/scheduler-fp
