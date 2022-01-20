@@ -19,7 +19,7 @@ nix-shell --run "cabal test"
 - [ ] handle DST
 - [ ] limit max suspension days
 - [ ] task for verifying env vars and config files
-- [ ] split <say> nodes into <gather> parent
+- [ ] split `<say>` nodes into `<gather>` parent
 - [ ] consider switching to megaparsec
 - [ ] announcement command
 - [ ] error logging/reporting
