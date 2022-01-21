@@ -756,12 +756,32 @@ sunday:
   describe "weekOf" $ do
     it "finds the week of the current date" $ do
       let
-        sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        wed = Date { dateDay = 07, dateMonth = December, dateYear = 2022 }
 
-        start = Start $ Date { dateDay = 28, dateMonth = February, dateYear = 2018 }
-        end = End $ Date { dateDay = 6, dateMonth = March, dateYear = 2018 }
+        sun = Start $ Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+        sat = End $ Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
 
-      weekOf sunday `shouldBe` (start, end)
+      weekOf wed `shouldBe` (sun, sat)
+
+    context "on the first day of the week" $ do
+      it "finds the week of the current date" $ do
+        let
+          sun = Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+
+          start = Start $ sun
+          end = End $ Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
+
+        weekOf sun `shouldBe` (start, end)
+
+    context "on the first day of the week" $ do
+      it "finds the week of the current date" $ do
+        let
+          sun = Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
+
+          start = Start $ Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+          end   = End $ sun
+
+        weekOf sun `shouldBe` (start, end)
 
   describe "stafferOnCal" $ do
     context "when staffer's name is in the event summary" $ do

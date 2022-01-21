@@ -10,24 +10,27 @@ nix-shell --run "cabal test"
 ```
 
 # todos
-- [ ] remove annex related code
-- [ ] better in-server documentation
+- [ ] dhall configs
 - [ ] deployment scripts
 - [ ] document functionality in readme
+- [ ] remove annex related code
+- [ ] add date numeral to pretty print
 - [ ] use phone number as ID
+- [ ] split `<say>` nodes into `<gather>` parent
 - [ ] organize modules
 - [ ] improve cmd matching
 - [ ] improve handling for all-day events (recognize and toss)
 - [ ] handle DST
 - [ ] limit max suspension days
 - [ ] task for verifying env vars and config files
-- [ ] split `<say>` nodes into `<gather>` parent
 - [ ] consider switching to megaparsec
 - [ ] announcement command
 - [ ] error logging/reporting
 - [ ] handle DST and read TZ from config file
 - [ ] push env vars (and other?) into State monad
 - [ ] only create gauth token when old one expires
+- [x] better in-server documentation
+- [x] move to sun-sat week
 - [x] write alerts for annex location
 - [x] user roles
 - [x] alert messages filter by corresponding roles

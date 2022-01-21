@@ -17,6 +17,7 @@ import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
 import Control.Monad.STM (atomically)
 import Test.QuickCheck (generate, elements)
 import Control.Monad.Trans.Reader (ReaderT(..), ask)
+import Control.Monad (join)
 import Data.Foldable (asum)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -461,7 +462,7 @@ instance Show ResponseErrorGCalEvents where
 instance FromJSON (ISO8601 Text) where
   parseJSON = withObject "GCalDateTime" $ \v -> do
      dt <- v .:? "dateTime"
--- this is a hack to avoid solving the issue of how to handle parsing all-day events
+     -- this is a hack to avoid solving the issue of how to handle parsing all-day events
      d <- (fmap.fmap) (<> "T00:00:00Z") (v .:? "date")
      case asum [dt, d] of
        Just date -> pure $ ISO8601 date
@@ -673,14 +674,16 @@ parseSuspendDays t = handler $ parse suspendDaysParser "suspendDays" (toLower t)
     handler = either (const Nothing) id
 
 parseHelp :: Text -> Bool
-parseHelp t = handler $ parse helpParser "Info" (toLower t)
+parseHelp t = handler $ parse helpParser "Help" (toLower t)
   where
     handler = either (const False) (const True)
 
 helpParser :: ParsecT Text u Identity ()
 helpParser = do
   spaces
-  _ <- string "command"
+  _ <- string "commands"
+       <|> string "help"
+       <|> string "info"
   spaces
   pure ()
 
@@ -834,24 +837,23 @@ gapRel g e
   | otherwise = IntersectGap
 
 pickShiftSelector :: WeekDay -> (ShiftWeek a -> [Period a])
-pickShiftSelector Monday = wkMon
-pickShiftSelector Tuesday = wkTue
+pickShiftSelector Monday    = wkMon
+pickShiftSelector Tuesday   = wkTue
 pickShiftSelector Wednesday = wkWed
-pickShiftSelector Thursday = wkThu
-pickShiftSelector Friday = wkFri
-pickShiftSelector Saturday = wkSat
-pickShiftSelector Sunday = wkSun
+pickShiftSelector Thursday  = wkThu
+pickShiftSelector Friday    = wkFri
+pickShiftSelector Saturday  = wkSat
+pickShiftSelector Sunday    = wkSun
 
 sendSmsToRole :: ContactRole -> [Active Contact] -> Text -> IO ()
-sendSmsToRole role cs msg=
-  sendSmsTo (filter (Set.member role . contactRoles . runActive) cs)
-            msg
+sendSmsToRole role cs msg =
+  sendSmsTo (filter (Set.member role . contactRoles . runActive) cs) msg
 
 sendSmsTo :: [Active Contact] -> Text -> IO ()
 sendSmsTo cs msg = do
   loadEnv
-  from <- pack <$> getEnv "FROM_NUMBER"
-  twilSid <- getEnv "TWILIO_ACCT_SID"
+  from     <- pack <$> getEnv "FROM_NUMBER"
+  twilSid  <- getEnv "TWILIO_ACCT_SID"
   twilAuth <- getEnv "TWILIO_AUTH_TOKEN"
   let activeContacts = runActive <$> cs
   print =<< traverse (msgEach twilSid twilAuth msg from . unpack . contactNumber) activeContacts
@@ -880,7 +882,7 @@ loadShifts :: IO ShiftWeekTime
 loadShifts = validateShiftWeek <$> (decodeFileThrow . (<> "/schedule.yml") =<< configDir)
 
 weekStart :: WeekDay
-weekStart = Wednesday
+weekStart = Sunday
 
 weekOf :: Date -> (StartDate, EndDate)
 weekOf d
@@ -912,21 +914,21 @@ mainLocEmergencySMS :: IO ()
 mainLocEmergencySMS = do
   loadEnv
   calId    <- getMainLocCalId
-  name    <- getMainLocName
+  name     <- getMainLocName
   today    <- getInternTime' <$> getToday
   tomorrow <- getTomorrow
   contacts <- onlyActive today <$> loadContacts
   let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
-      start = Start $ getInternTime' tomorrow
-      end = End $ getInternTime' tomorrowEOD
-      tzo = localOffset
-  sched <- loadShifts
+      start       = Start $ getInternTime' tomorrow
+      end         = End $ getInternTime' tomorrowEOD
+      tzo         = localOffset
+  sched     <- loadShifts
   rawEvents <- getEventsForCal calId (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
+  events    <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   if not . null. runGaps $ gaps
-    then let preMsg = name <> " shift not covered tomorrow!\n"
-             msg = renderGaps gaps
+    then let preMsg  = name <> " shift not covered tomorrow!\n"
+             msg     = renderGaps gaps
              postMsg = "\nRespond with \"shifts\" to claim one right now"
          in
            print ("sending emergency alert to: " <> (pack . show $ contacts))
@@ -947,18 +949,18 @@ testNagAlert staffer = do
   calId <- getMainLocCalId
   today <- getToday
   let
-    todayTZ = HG.localTimeGetTimezone today
-    tzo = localOffset
+    todayTZ      = HG.localTimeGetTimezone today
+    tzo          = localOffset
     (_, endDate) = weekOf $ HG.localTimeUnwrap today
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  sched <- loadShifts
+    endDateEOD   = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start        = getInternTime' <$> Start today
+    end          = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched     <- loadShifts
   rawEvents <- getEventsForCal calId (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
+  events    <- validateGCalEvent' `traverse` rawEvents
   if stafferOnCal staffer events
     then print ("What a responsible bastard!" :: Text)
-    else let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
+    else let gaps   = getMinGapsInRange tzo minGapDuration sched (start, end) events
              gapMsg = pack $ show $ renderGaps gaps
          in print $ "couldn't find " <> staffer <> pack " on cal\n" <> gapMsg
 
@@ -970,28 +972,28 @@ nagAlert = do
   print ("Nagger notifications starting" :: Text)
   today <- getToday
   let
-    tzo = localOffset
-    todayTZ = HG.localTimeGetTimezone today
+    tzo                  = localOffset
+    todayTZ              = HG.localTimeGetTimezone today
     (startDate, endDate) = weekOf $ HG.localTimeUnwrap today
-    startDateBOD = flip DateTime (TimeOfDay 0 0 0 0) <$> startDate
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> HG.localTime todayTZ <$> startDateBOD
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-    currentDayIntern = getInternTime' today
-  sched <- loadShifts
+    startDateBOD         = flip DateTime (TimeOfDay 0 0 0 0) <$> startDate
+    endDateEOD           = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start                = getInternTime' <$> HG.localTime todayTZ <$> startDateBOD
+    end                  = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+    currentDayIntern     = getInternTime' today
+  sched     <- loadShifts
   rawEvents <- getEventsForCal calId  (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
-  contacts <- onlyActive currentDayIntern <$> loadContacts
-  let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
+  events    <- validateGCalEvent' `traverse` rawEvents
+  contacts  <- onlyActive currentDayIntern <$> loadContacts
+  let gaps  = getMinGapsInRange tzo minGapDuration sched (start, end) events
       toNag = whomToNag events contacts
   if null . runGaps $ gaps
     then print ("NAGGING: Nobody, as no gaps were found" :: Text) -- send no alerts if there are no gaps
     else mapM_ (msgLaxContacts gaps) toNag
   where
       msgLaxContacts gaps c =
-        let name = contactName . runActive $ c
-            gapMsg = renderGaps gaps
-            preMsg = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
+        let name    = contactName . runActive $ c
+            gapMsg  = renderGaps gaps
+            preMsg  = "\"" <> name <> "\" isn't on the cal yet this week. Pls take a shift (or say \"suspend\" if you can't this week)\n"
             postMsg = "\nRespond with \"shifts\" to claim one right now"
         in print ("\nNAGGING:  " <> name)
            >> sendSmsToRole WeeklyRole [c] (preMsg <> gapMsg <> postMsg)
@@ -1011,23 +1013,22 @@ gapsThisWeekAlert :: IO ()
 gapsThisWeekAlert = do
   loadEnv
   mainName <- getMainLocName
-  calId <- getMainLocCalId
-  today <- getToday
+  calId    <- getMainLocCalId
+  today    <- getToday
   contacts <- onlyActive (getInternTime' today) <$> loadContacts
   let
-    dateToStart =
-      if isEndOfWeek today
-      then nextDate <$> today
-      else today
-    tzo = localOffset -- TODO: push tzo into state monad
-    todayTZ = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
+    dateToStart  = if isEndOfWeek today
+                   then nextDate <$> today
+                   else today
+    tzo          = localOffset -- TODO: push tzo into state monad
+    todayTZ      = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
     (_, endDate) = weekOf $ HG.localTimeUnwrap dateToStart
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  sched <- loadShifts
+    endDateEOD   = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start        = getInternTime' <$> Start today
+    end          = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  sched     <- loadShifts
   rawEvents <- getEventsForCal calId (start, end)
-  events <- validateGCalEvent' `traverse` rawEvents
+  events    <- validateGCalEvent' `traverse` rawEvents
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
   sendSmsToRole WeeklyRole contacts $ ((mainName <> " Weekly Schedule Notice:\n") <>) $ renderGaps gaps
   where
@@ -1036,26 +1037,26 @@ gapsThisWeekAlert = do
 annexGapsThisWeekAlert :: IO ()
 annexGapsThisWeekAlert = do
   loadEnv
-  annexName <- getAnnexName
-  eventCalId <- getAnnexEventsCalId
+  annexName     <- getAnnexName
+  eventCalId    <- getAnnexEventsCalId
   staffingCalId <- getAnnexStaffingCalId
-  today <- getToday
-  contacts <- onlyActive (getInternTime' today) <$> loadContacts
+  today         <- getToday
+  contacts      <- onlyActive (getInternTime' today) <$> loadContacts
   let
     dateToStart =
       if isEndOfWeek today
       then nextDate <$> today
       else today
-    tzo = localOffset -- TODO: push tzo into state monad
-    todayTZ = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
+    tzo          = localOffset -- TODO: push tzo into state monad
+    todayTZ      = HG.localTimeGetTimezone today -- TODO: consider removing all the "todayTZ" instances
     (_, endDate) = weekOf $ HG.localTimeUnwrap dateToStart
-    endDateEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
-    start = getInternTime' <$> Start today
-    end = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
-  rawEvents <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
-  events <- (traverse . traverse) validateGCalEvent' rawEvents
+    endDateEOD   = flip DateTime (TimeOfDay 23 59 59 0) <$> endDate
+    start        = getInternTime' <$> Start today
+    end          = getInternTime' <$> HG.localTime todayTZ <$> endDateEOD
+  rawEvents   <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
+  events      <- (traverse . traverse) validateGCalEvent' rawEvents
   rawCoverage <- (fmap.fmap) Covered $ getEventsForCal staffingCalId (start, end)
-  coverage <- (traverse . traverse) validateGCalEvent' rawCoverage
+  coverage    <- (traverse . traverse) validateGCalEvent' rawCoverage
   let gaps = getAllGapsAllDay tzo coverage events
   sendSmsToRole AnnexRole contacts $ ((annexName <> " Schedule:\n") <>) $ renderGaps gaps
   where
@@ -1067,20 +1068,20 @@ renderGaps = toText . (fmap . fmap . fmap) internToLocal
 annexEmergencySMS :: IO ()
 annexEmergencySMS = do
   loadEnv
-  annexName <- getAnnexName
-  eventCalId <- getAnnexEventsCalId
+  annexName     <- getAnnexName
+  eventCalId    <- getAnnexEventsCalId
   staffingCalId <- getAnnexStaffingCalId
-  today    <- getInternTime' <$> getToday
-  tomorrow <- getTomorrow
-  contacts <- onlyActive today <$> loadContacts
+  today         <- getInternTime' <$> getToday
+  tomorrow      <- getTomorrow
+  contacts      <- onlyActive today <$> loadContacts
   let tomorrowEOD = flip DateTime (TimeOfDay 23 59 59 0) <$> tomorrow
-      start = Start $ getInternTime' tomorrow
-      end = End $ getInternTime' tomorrowEOD
-      tzo = localOffset
-  rawEvents <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
-  events <- (traverse . traverse) validateGCalEvent' rawEvents
+      start       = Start $ getInternTime' tomorrow
+      end         = End $ getInternTime' tomorrowEOD
+      tzo         = localOffset
+  rawEvents   <- (fmap.fmap) StoreEvent $ getEventsForCal eventCalId (start, end)
+  events      <- (traverse . traverse) validateGCalEvent' rawEvents
   rawCoverage <- (fmap.fmap) Covered $ getEventsForCal staffingCalId (start, end)
-  coverage <- (traverse . traverse) validateGCalEvent' rawCoverage
+  coverage    <- (traverse . traverse) validateGCalEvent' rawCoverage
   let gaps = getAllGapsAllDay tzo coverage events
   if not . null . runGaps $ gaps
     then let preMsg = annexName <> " events not staffed tomorrow!:\n"
@@ -1201,13 +1202,13 @@ type API = "sms" :> Header "Cookie" Cookies
                       :> ReqBody '[FormUrlEncoded] TwilioMsgData
                       :> Post '[XML] (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
 
-server :: ServerT API AppM
+server :: ServerT API HandlerT
 server = twilMsg
     :<|> twilCall
     :<|> backTalkMsg
 
   where
-    twilMsg :: Maybe Cookies -> TwilioMsgData -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+    twilMsg :: Maybe Cookies -> TwilioMsgData -> HandlerT (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     twilMsg cookies inMsg = do
       liftIO loadEnv
       contacts <- liftIO loadContacts
@@ -1222,19 +1223,25 @@ server = twilMsg
           liftIO $ print ("Unrecognized number\n" :: Text)
           performCmd UnrecognizedNumber
 
-    twilCall :: TwilioCallData -> ReaderT AppState Handler TwilioCallResponse
+    twilCall :: TwilioCallData -> HandlerT TwilioCallResponse
     twilCall inMsg = do
       liftIO (print inMsg)
       responses <- liftIO loadCallResponse
       response <- liftIO $ randItem responses
       liftIO . pure . twimlCall $ response
 
-    backTalkMsg :: Maybe Cookies -> TwilioMsgData -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+    backTalkMsg :: Maybe Cookies -> TwilioMsgData -> HandlerT (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
     backTalkMsg _ msg = do
-      state <- ask
-      storedMsg <- liftIO . atomically $ readTVar state
-      liftIO . atomically $ writeTVar state (msgBody msg)
-      performCmd $ SMSResponse storedMsg
+      state        <- ask
+      storedMsg    <- liftIO . atomically . fmap stateMessage $ readTVar state
+      storedSender <- liftIO . atomically . fmap stateSender $ readTVar state
+      liftIO . atomically $ writeTVar state $ AppState{ stateMessage = msgBody msg, stateSender = msgFrom msg }
+      if msgFrom msg == storedSender
+        then join . fmap performCmd . fmap SMSResponse $ liftIO dummyBacktalk
+        else performCmd $ SMSResponse storedMsg
+
+dummyBacktalk :: IO Text
+dummyBacktalk = randItem =<< (decodeFileThrow . (<> "/dummy_responses.yml") =<< configDir :: IO [Text])
 
 twimlCall :: Text -> TwilioCallResponse
 twimlCall = TCallResp
@@ -1271,16 +1278,16 @@ daysUntilIter :: Int -> Date -> WeekDay -> Int
 daysUntilIter counter day end | (getWeekDay day) == end = counter
                               | otherwise = daysUntilIter (counter + 1) (nextDate day) end
 
-performCmd :: Cmd -> ReaderT AppState Handler (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
+performCmd :: Cmd -> HandlerT (Headers '[Header "Set-Cookie" SetCookie] TwilioMsgResponse)
 
 performCmd (SMSResponse msg) = pure $ destroyCookie $ twimlMsg msg
 
 performCmd (UnrecognizedCmd d) =
-  pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized") . msgBody $ d)
+  pure $ destroyCookie (twimlMsg . (\a -> "\"" <> a <> "\" not recognized.\nSay \"info\" for possible commands.\nAnd I don't recommend calling.") . msgBody $ d)
 
 performCmd AvailableShifts = do
   gaps <- indexGaps <$> (liftIO . gapsNowTo . Days $ 7)
-  let preMsg = "Open shifts this week.\nRespond with the number to claim it.\n"
+  let preMsg = "Open shifts in the next 7 days.\nRespond with the number to claim it.\n"
   pure
     $ addAvailableshiftsCookie
     gaps
@@ -1312,8 +1319,7 @@ performCmd (Suspend c d) = do
   liftIO $ suspendContact c $ getInternTime' until
   pure $ destroyCookie $ twimlMsg $ textRender $ msg
 
-performCmd Help =
-  pure $ destroyCookie $ twimlMsg $ toText helpText
+performCmd Help = pure $ destroyCookie $ twimlMsg $ toText helpText
 
 
 suspendContact :: Contact -> InternTime -> IO ()
@@ -1374,59 +1380,25 @@ availableShiftsCookieName = "available-shifts"
 contactsAPI :: Proxy API
 contactsAPI = Proxy
 
--- 'serve' comes from servant and hands you a WAI Application,
--- which you can think of as an "abstract" web application,
--- not yet a webserver.
--- app :: Config -> Application
--- app c = serve contactsAPI server
+type HandlerT = ReaderT TAppState Handler
+type TAppState = TVar AppState
+data AppState = AppState {
+    stateMessage :: Text
+  , stateSender :: Text
+  }
 
--- app :: Config -> Application
--- app cfg = serve api' (readerServer cfg)
-
-
--- data Config = Config { appState :: TVar Text }
--- https://stackoverflow.com/questions/38145566/servant-always-give-me-a-initial-value-in-readert-monad
-
--- main :: IO ()
--- main = do
---   services <- atomically (newTVar M.empty)
---   run 8080 $ serve Proxy (server services)
-
--- server :: TVar Services -> Server Api
--- server services = enter (readerToHandler services) serverT
-
--- getService :: LocalHandler (Maybe MicroService)
--- getService = do
---   services <- ask
---   liftIO . atomically $ do
---     mss <- readTVar services
---     ...
-
---- from master:
--- type AppM = StateT AppState Handler
-
--- getHandler :: AppState -> AppM a -> Handler a
--- getHandler s x = (fmap fst) $ runStateT x s
-
--- app :: AppState -> Application
--- app s = serve contactsAPI $ hoistServer contactsAPI (getHandler s) server
-
- -- ReaderT Config (StateT LoggedUsers (ExceptT ServantErr IO))
-type AppM = ReaderT AppState Handler
-type AppState = TVar Text
-
-getHandler :: AppState -> AppM a -> Handler a
+getHandler :: TAppState -> HandlerT a -> Handler a
 getHandler = flip runReaderT
 
-mkserver :: AppState -> Application
+mkserver :: TAppState -> Application
 mkserver s = serve contactsAPI $ hoistServer contactsAPI (getHandler s) server
 
 startServer :: IO ()
 startServer = do
   withStdoutLogger $ \appLogger -> do
-    state <- atomically $ newTVar "hello world!"
+    state <- atomically $ newTVar AppState{ stateMessage = "hello world!", stateSender = "0" }
     let settings = setPort 3000 $ setLogger (logHeaders appLogger) defaultSettings
-    (runSettings $  settings) (mkserver state)
+    (runSettings $ settings) (mkserver state)
 
 -- -- type ApacheLogger = Request -> Status -> Maybe Integer -> IO ()
 -- Use this to log all request headers
