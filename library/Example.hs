@@ -13,6 +13,7 @@ module Example where
 
 import Prelude hiding (until)
 
+import Data.Char (ord)
 import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
 import Control.Monad.STM (atomically)
 import Test.QuickCheck (generate, elements)
@@ -1237,11 +1238,22 @@ server = twilMsg
       storedSender <- liftIO . atomically . fmap stateSender $ readTVar state
       liftIO . atomically $ writeTVar state $ AppState{ stateMessage = msgBody msg, stateSender = msgFrom msg }
       if msgFrom msg == storedSender
-        then join . fmap performCmd . fmap SMSResponse $ liftIO dummyBacktalk
+        then join . fmap performCmd . fmap SMSResponse . liftIO . dummyBacktalk $ msgFrom msg
         else performCmd $ SMSResponse storedMsg
 
-dummyBacktalk :: IO Text
-dummyBacktalk = randItem =<< (decodeFileThrow . (<> "/dummy_responses.yml") =<< configDir :: IO [Text])
+dummyBacktalk :: Text -> IO Text
+dummyBacktalk from = do
+  dummies <- decodeFileThrow . (<> "/dummy_responses.yml") =<< configDir
+  date    <- todaysDate
+  fudge   <- randItem [0, 3]
+  let xs  = fmap toInt . unpack $ from
+  let x   = date + sum xs + fudge
+      i   = x `mod` length dummies
+  pure $ dummies !! i
+
+  where
+    todaysDate = fmap dateDay . fmap HG.localTimeUnwrap  $ getToday
+    toInt = Prelude.fromIntegral . ord
 
 twimlCall :: Text -> TwilioCallResponse
 twimlCall = TCallResp
