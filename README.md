@@ -12,6 +12,7 @@ nix-shell --run "cabal test"
 # todos
 - [ ] remove annex related code
 - [ ] better in-server documentation
+- [ ] deployment scripts
 - [ ] document functionality in readme
 - [ ] use phone number as ID
 - [ ] organize modules

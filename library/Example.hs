@@ -9,71 +9,13 @@
 
 {-# OPTIONS_GHC -fwarn-unused-do-bind #-}
 
-
--- TODO:
--- show annex event names in alerts
--- claiming annex shifts
--- check for ruby pairity
--- figure out how to handle suspensions for both locations
--- use phone number as ID
--- improve cmd matching
--- improve handling for all-day events (recognize and toss)
--- handle DST
--- port 1877
--- limit max suspension days
--- task for verifying env vars and config files
--- split <say> nodes into <gather> parent
--- test parsing contacts.yaml
--- consider how/when to number gaps (for selection) (or to make more like ruby version)
--- consider rendering shift select list from same data as shifts json (first make a map?)
--- consider switching to megaparsec
--- contacts in db
--- announcement command
--- error logging/reporting
--- handle DST and read TZ from config file
--- push env vars (and other?) into State monad
--- only create gauth token when old one expires
-
--- DONE:
--- write alerts for annex location
--- user roles
--- alert messages filter by corresponding roles
--- suspend response should show month
--- default suspension days if no number specified
--- "commands" (help) command
--- test task for who will be msged by nagger
--- deployment
--- cron tasks
--- expose notification tasks
--- tasks leave alone suspended users
--- fix adding extra contacts on write
--- "shifts" should look at next 7 days
--- suspensions
--- post exlusivly (not if another event exists)
--- claim gcal shifts
--- fixz correspondance between shift select map and displayed shifts
--- implement twilio msg conversation
--- capture twilio cookies
--- destroying cookies
--- set twilio cookies
--- api endpoint and msg response
--- contacts in yaml
--- emergency msg
--- daily nag msg
--- fix msg formatting
--- extract sensitive info (#'s) into env and commit
-
 module Example where
-
---import Debug.Trace
 
 import Prelude hiding (until)
 
 import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
 import Control.Monad.STM (atomically)
 import Test.QuickCheck (generate, elements)
--- import Control.Monad.Trans.RWS.CPS (ask)
--- import Control.Monad.Trans.State.Strict (StateT(..), get, put)
 import Control.Monad.Trans.Reader (ReaderT(..), ask)
 import Data.Foldable (asum)
 import Data.Set (Set)
@@ -91,13 +33,13 @@ import Servant.Server (ServerT)
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (setLogger, setPort, runSettings, defaultSettings)
 import Network.Wai.Logger (withStdoutLogger)
-import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
+import Prettyprinter.Render.Text (renderStrict)
 import Time.System (localDateCurrentAt)
 import qualified Data.Map as Map
 import Formatting (format, (%))
 import qualified Formatting.Formatters as FMT
 import Formatting.Formatters (left, int)
-import Data.Text.Prettyprint.Doc (Pretty(..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
+import Prettyprinter (Pretty(..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
 import Data.Maybe (catMaybes)
 import Data.Int (Int64)
 import Data.Yaml (decodeFileThrow, encodeFile)
@@ -780,7 +722,7 @@ getAllGapsInRange tzo shifts (start, end) events =
 -- TODO: should daterange be a period?
 -- TODO: do we need tzo here? (It seems not as we're comparing intern to intern?)
 getAllGapsAllDay :: TimezoneOffset -> [Covered GCalEventI] -> [StoreEvent GCalEventI] -> Gaps [Period InternTime]
-getAllGapsAllDay tzo coverage events =
+getAllGapsAllDay _ coverage events =
   Gaps $ dayGetGaps storeEvents coveragePeriods
   where
     storeEvents = periodize . runStoreEvent <$> events
@@ -1025,7 +967,7 @@ nagAlert :: IO ()
 nagAlert = do
   loadEnv
   calId <- getMainLocCalId
-  print "Nagger notifications starting"
+  print ("Nagger notifications starting" :: Text)
   today <- getToday
   let
     tzo = localOffset
@@ -1043,7 +985,7 @@ nagAlert = do
   let gaps = getMinGapsInRange tzo minGapDuration sched (start, end) events
       toNag = whomToNag events contacts
   if null . runGaps $ gaps
-    then print "NAGGING: Nobody, as no gaps were found" -- send no alerts if there are no gaps
+    then print ("NAGGING: Nobody, as no gaps were found" :: Text) -- send no alerts if there are no gaps
     else mapM_ (msgLaxContacts gaps) toNag
   where
       msgLaxContacts gaps c =
