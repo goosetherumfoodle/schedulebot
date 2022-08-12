@@ -5,3 +5,8 @@
 /.env
 *~
 /.dir-locals.el
+/dist-newstyle/
+/dist/
+**/.dir-locals.el
+/result
+/.stack-work/

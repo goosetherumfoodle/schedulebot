@@ -1,5 +1,12 @@
 # [scheduler-fp][]
 
+building with stack:
+```sh
+nix-shell -p stack -p libiconv -p zlib -p gmp -p openssl -p cabal-install
+...
+stack install
+```
+
 Thanks for starting a project with Haskeleton! If you haven't heard of it
 before, I suggest reading the introductory blog post. You can find it here:
 <http://taylor.fausak.me/2014/03/04/haskeleton-a-haskell-project-skeleton/>.
