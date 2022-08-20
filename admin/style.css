@@ -1,0 +1,13 @@
+body {
+    background-color: #98a3b5 !important;
+}
+
+
+div {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-align: center;
+  color: black;
+  margin: 0 auto;
+}

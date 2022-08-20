@@ -1,0 +1,25 @@
+{
+  "name": "schedulebot-admin",
+  "author": "Jesse Hanley",
+  "description": "administrative features for scheduling bot",
+  "version": "0.0.0",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "elm-tooling install",
+    "dev": "vite",
+    "prebuild": "elm-tooling install",
+    "build": "vite build",
+    "serve": "vite preview",
+    "test": "elm-test-rs"
+  },
+  "devDependencies": {
+    "@iconify-json/logos": "^1.1.13",
+    "elm-review": "^2.7.3",
+    "elm-tooling": "^1.8.0",
+    "vite": "^2.9.14",
+    "vite-plugin-elm": "^2.6.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.0.2"
+  }
+}
