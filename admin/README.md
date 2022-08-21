@@ -1,5 +1,10 @@
 # Schedulebot Admin
 
+add elm lib
+```
+elm install <maintainer>/<lib>
+```
+
 elm tools
 ```
 pnx elm-tooling

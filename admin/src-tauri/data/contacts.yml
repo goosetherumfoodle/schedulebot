@@ -1,0 +1,28 @@
+- roles:
+  - weekly
+  suspendUntil: null
+  name: joxe
+  id: 1
+  number: '+1123456789'
+- roles:
+  - weekly
+  suspendUntil: null
+  name: Big Suze
+  id: 2
+  number: '+21231234'
+- roles: []
+  suspendUntil: null
+  name: joe
+  id: 3
+  number: '+31231234'
+- roles:
+  - weekly
+  suspendUntil: null
+  name: Booze
+  id: 4
+  number: '+41231234'
+- roles: []
+  suspendUntil: null
+  name: jez
+  id: 5
+  number: '+51231234'
