@@ -20,11 +20,8 @@ type alias Model =
 
 
 type Msg =
-      Send String
-    | Received String
-    | SendIt
+      NoOp
     | NewInput String
-    | NoOp
     | SelectStaffer Int
     | FieldHovered StafferField
     | FieldExited
@@ -32,6 +29,7 @@ type Msg =
     | ChangeEditingModalInput String
     | EditingModalCancel
     | EditingModalSave
+    | ReceivedStaffers String
 
 type alias StafferIx = Int
 
@@ -39,6 +37,7 @@ type alias Staffer =
     { name: String
     , number: String
     , suspendedUntil: Maybe String
+    , id: String
     }
 
 type StafferField =

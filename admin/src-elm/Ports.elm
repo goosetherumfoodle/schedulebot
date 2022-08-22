@@ -2,9 +2,12 @@ port module Ports exposing (..)
 
 import Types exposing (..)
 
-port greet : String -> Cmd msg
-port messageReceiver : (String -> msg) -> Sub msg
+
+port receiveStaffers : (String -> msg) -> Sub msg
+
+port getStaffers : () -> Cmd msg
+port saveStafferField : String -> Cmd msg
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-  messageReceiver Received
+  receiveStaffers ReceivedStaffers

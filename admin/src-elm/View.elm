@@ -8,21 +8,11 @@ import Element.Input as EI
 import Element.Events as EE
 import Element.Font as Font
 import Array as Array
+import Util exposing (getField, displayField)
+import Ports exposing (saveStafferField)
 
 import Types exposing (..)
 import Color as Color
-
-getField : Staffer -> StafferField -> String
-getField s field =
-    case field of -- can we replace StafferField with access function?
-        Number -> s.number
-        Name -> s.name
-
-displayField : StafferField -> String
-displayField field =
-    case field of
-        Name -> "Name"
-        Number -> "Number"
 
 view : Model -> Html Msg
 view model =
@@ -84,6 +74,7 @@ displayStaffer mdl =
 staffListing ix data =
     EL.el [ EL.padding 3
           , EB.color Color.olive
+          , EL.mouseOver [EB.color Color.lightOlive]
           , EBORD.color Color.brown
           , EBORD.widthXY 0 2
           , EL.pointer
@@ -113,8 +104,8 @@ editFieldModal mModal = -- model.editingField model.editingModalInput
                          , EI.text
                                [EL.width <| EL.shrink]
                                { label = EI.labelHidden "yo"
-                               , onChange = \input_ -> ChangeEditingModalInput input_
-                               , placeholder = Just <| EI.placeholder [] <| EL.text <| displayField editingField
+                               , onChange = ChangeEditingModalInput
+                               , placeholder = Just <| EI.placeholder [] <| EL.text <| getField staffer editingField
                                , text = input
                                }
                          , EL.paragraph []

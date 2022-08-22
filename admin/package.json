@@ -3,7 +3,7 @@
   "author": "Jesse Hanley",
   "description": "administrative features for scheduling bot",
   "version": "0.0.0",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "postinstall": "elm-tooling install",
     "dev": "vite",

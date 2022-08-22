@@ -1,5 +1,7 @@
 # Schedulebot Admin
 
+https://jezenthomas.com/how-i-write-elm-applications/
+
 add elm lib
 ```
 elm install <maintainer>/<lib>
@@ -15,8 +17,8 @@ unintalling elm dep
 npx elm-json uninstall Gizra/elm-keyboard-event
 ```
 
-running
+running dev server
 ```
 pnpm install
-pnpm tauri dev
+cago tauri dev
 ```

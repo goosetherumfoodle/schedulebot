@@ -11,6 +11,8 @@ blue = EL.rgb255 46 152 120
 -- olive = "89 98 78"
 olive = EL.rgb255 137 152 120
 
+lightOlive = EL.rgb255 147 162 130
+
 -- brown = "7a 54 2e"
 brown = EL.rgb255 122 84 46
 
