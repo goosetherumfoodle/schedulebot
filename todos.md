@@ -1,16 +1,4 @@
-# [scheduler-fp][]
-
-# building
-```sh
-nix-build
-```
-# running tests
-```sh
-nix-shell --run "cabal test"
-```
-
 # todos
-- [ ] dhall configs
 - [ ] deployment scripts
 - [ ] document functionality in readme
 - [ ] remove annex related code
@@ -57,7 +45,3 @@ nix-shell --run "cabal test"
 - [x] emergency msg
 - [x] daily nag msg
 - [x] fix msg formatting
-
-
-
-[scheduler-fp]: https://github.com/goosetherumfoodle/scheduler-fp

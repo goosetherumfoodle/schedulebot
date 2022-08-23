@@ -1,0 +1,42 @@
+* Schedule Bot
+
+An sms-bot for scheduling volunteers to take shifts at a brick-and-mortar space. It
+reads a google calandar to find gaps in shift coverage and then sends
+notifications. People can then claim a shift by putting themselves on
+the calandar manually, or by responding to the bot which will create a
+shift in the calandar for them.
+
+The binaries will expect that the environment variables defined in
+[[file:.env.example][env.example]] are present.
+
+* Building
+#+BEGIN_SRC bash
+nix-build
+#+END_SRC
+
+* Running tests
+#+BEGIN_SRC bash
+nix-shell --run "cabal test"
+#+END_SRC
+
+* Design
+
+This service was designed to be [[https://calmtech.com/][calm technology]]. The community group
+it was made for had a pre-existing scheduling workflow that involved
+people signing themselves up for shifts on a google calandar. Some
+people involved either didn't have smartphones or access to the
+calander so instead they'd text someone else in the group to sign them
+up. Schedule Bot fits neatly into that workflow without requiring that
+the users use a new interface.
+
+That being said, I never thought of a way to integrate admin
+functionality to the bot just using sms that I was happy with. So I
+put off the decision and when they want to add a new person I've just
+been updating a [[file:config/contacts.yml][contact list]] on the bot's server. But I recently
+realized the best way to handle this (and make less work for myself)
+is to deploy a desktop app on the computer at the store, that any of
+the volunteers can log into and edit the list of contacts. So I'm
+currently planning on doing a desktop app using [[https://elm-lang.org/][elm]], [[https://tauri.app/][tauri]], and
+I'll probably add a lightweight db to the bot to replace the yaml file.
+
+https://github.com/goosetherumfoodle/scheduler-fp
