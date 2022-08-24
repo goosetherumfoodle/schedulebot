@@ -1,6 +1,6 @@
 * Schedule Bot
 
-An sms-bot for scheduling volunteers to take shifts at a brick-and-mortar space. It
+An sms-bot for scheduling volunteers to take shifts at a brick-and-mortar store. It
 reads a google calandar to find gaps in shift coverage and then sends
 notifications. People can then claim a shift by putting themselves on
 the calandar manually, or by responding to the bot which will create a
