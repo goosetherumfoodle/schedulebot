@@ -26,8 +26,8 @@ it was made for had a pre-existing scheduling workflow that involved
 people signing themselves up for shifts on a google calandar. Some
 people involved either didn't have smartphones or access to the
 calander so instead they'd text someone else in the group to sign them
-up. Schedule Bot fits neatly into that workflow without requiring that
-the users use a new interface.
+up. Schedule Bot fits neatly into that workflow without introducing a new interface
+that workflow.
 
 That being said, I never thought of a way to integrate admin
 functionality to the bot just using sms that I was happy with. So I
