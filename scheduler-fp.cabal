@@ -24,7 +24,7 @@ source-repository head
 
 library
   exposed-modules:
-      Example
+      Bot.Example, Bot.Time, Bot.Twilio, Bot.Cal, Bot.Server, Bot.Command
   other-modules:
       Paths_scheduler_fp
   hs-source-dirs:
