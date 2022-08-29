@@ -1,63 +1,84 @@
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Bot.Time where
 
 import Control.Exception (Exception, throwIO)
-import Formatting (format, (%))
-import Data.Aeson (FromJSON(..)
-                  , ToJSON(..)
-                  , Result(..)
-                  , Value(..)
-                  , fromJSON
-                  , withObject
-                  , withText
-                  , withArray
-                  , object
-                  , pairs
-                  , encode
-                  , decode
-                  , (.:)
-                  , (.:?)
-                  , (.=))
-
-import qualified Formatting.Formatters as FMT
-import Prettyprinter (Pretty(..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
-import Data.Text (Text(..), pack, unpack)
-import Time.System (localDateCurrentAt)
-import Data.Hourglass ( UTC(..)
-                      , Timeable
-                      , LocalTime
-                      , DateTime(..)
-                      , WeekDay(..)
-                      , ISO8601_DateAndTime(..)
-                      , Date(..)
-                      , TimeOfDay(..)
-                      , Month(..)
-                      , Hours(..)
-                      , Minutes(..)
-                      , TimezoneOffset(..)
-                      , localTimeGetTimezone
-                      , localTime
-                      , localTimeUnwrap
-                      , timezoneOffset
-                      , dateAddPeriod
-                      , timeGetDateTimeOfDay
-                      , getWeekDay
-                      , timeDiff
-                      , toSeconds
-                      , fromSeconds
-                      , timeGetDate
-                      )
+import Control.Lens (Identity, preview, (&), (.~), (?~), (^?))
+import Data.Aeson
+  ( FromJSON (..),
+    Result (..),
+    ToJSON (..),
+    Value (..),
+    decode,
+    encode,
+    fromJSON,
+    object,
+    pairs,
+    withArray,
+    withObject,
+    withText,
+    (.:),
+    (.:?),
+    (.=),
+  )
+import Data.Aeson.Types (Parser)
+import Data.Hourglass
+  ( Date (..),
+    DateTime (..),
+    Hours (..),
+    ISO8601_DateAndTime (..),
+    LocalTime,
+    Minutes (..),
+    Month (..),
+    TimeOfDay (..),
+    Timeable,
+    TimezoneOffset (..),
+    UTC (..),
+    WeekDay (..),
+    dateAddPeriod,
+    fromSeconds,
+    getWeekDay,
+    localTime,
+    localTimeGetTimezone,
+    localTimeUnwrap,
+    timeDiff,
+    timeGetDate,
+    timeGetDateTimeOfDay,
+    timezoneOffset,
+    toSeconds,
+  )
 import qualified Data.Hourglass as HG
 import Data.Int (Int64)
 import qualified Data.Map as Map
+import Data.Text (Text (..), pack, unpack)
+import Data.Vector ((!), (!?))
+import Formatting (format, (%))
+import qualified Formatting.Formatters as FMT
+import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
+import Text.Parsec
+  ( ParseError,
+    ParsecT,
+    anyChar,
+    char,
+    count,
+    digit,
+    many,
+    manyTill,
+    parse,
+    spaces,
+    string,
+    try,
+    (<|>),
+  )
+import Text.Read (readMaybe)
+import Time.System (localDateCurrentAt)
 
 data ISO8601Error = ISO8601Error String
 
@@ -89,6 +110,7 @@ type ShiftTimeOfDay = ShiftTime HG.TimeOfDay
 newtype ISO8601 a = ISO8601 a deriving (Show, Eq)
 type TimeOfDay = HG.TimeOfDay
 type Hours = HG.Hours
+type DateTime = HG.DateTime
 type Minutes = HG.Minutes
 type Elapsed = HG.Elapsed
 type LocalTime = HG.LocalTime
@@ -172,7 +194,7 @@ periodDuration a = fromSeconds $ timeDiff (inUTC . periodEnd $ a) (inUTC . perio
   where
     inUTC = HG.localTimeUnwrap . runIntern
 
-internToDateTime :: HG.TimezoneOffset -> InternTime -> DateTime
+internToDateTime :: HG.TimezoneOffset -> InternTime -> HG.DateTime
 internToDateTime tzo = timeGetDateTimeOfDay . HG.localTimeUnwrap . HG.localTimeSetTimezone tzo . runIntern
 
 internToDate :: HG.TimezoneOffset -> InternTime -> HG.Date
@@ -294,8 +316,117 @@ show8601UTC =  show8601 utcOffset
 show8601Local :: InternTime -> Text
 show8601Local = show8601 localOffset
 
+getTomorrow :: IO (HG.LocalTime HG.Date)
+getTomorrow = (fmap . fmap) nextDate $ getToday
+
+datesFromTo :: StartDate -> EndDate -> [HG.Date]
+datesFromTo (Start d1) (End d2)
+  | d1 < d2   = d1 : datesFromTo (Start . nextDate $ d1) (End d2)
+  | otherwise = [d2]
+
+advanceDate :: Days Int -> HG.Date -> HG.Date
+advanceDate (Days n) =
+  flip HG.dateAddPeriod day
+  where
+    day = HG.Period
+      { HG.periodYears = 0
+      , HG.periodMonths = 0
+      , HG.periodDays = n
+      }
+
+nextDate :: HG.Date -> HG.Date
+nextDate = advanceDate . Days $ 1
+
 instance Exception ISO8601Error
 
 instance Show ISO8601Error where
   show (ISO8601Error str) =
     "Error: Couldn't parse ISO8601 date format from: " <> str
+
+-- TODO: validate times
+validateShiftWeek :: ShiftWeekRaw -> ShiftWeekTime
+validateShiftWeek (ShiftW mo tu w th f sa su) =
+  ShiftW (toTime mo)
+         (toTime tu)
+         (toTime w)
+         (toTime th)
+         (toTime f)
+         (toTime sa)
+         (toTime su)
+  where
+    toTime :: [Period RawShiftTime] -> [Period ShiftTimeOfDay]
+    toTime = fmap . fmap . fmap $ uncurry mkTOD
+
+    mkTOD :: Int64 -> Int64 -> HG.TimeOfDay
+    mkTOD h m = TimeOfDay (Hours h) (Minutes m) 0 0
+
+daysUntilIter :: Int -> HG.Date -> WeekDay -> Int
+daysUntilIter counter day end | (getWeekDay day) == end = counter
+                              | otherwise = daysUntilIter (counter + 1) (nextDate day) end
+
+daysUntil :: HG.TimezoneOffset -> InternTime -> WeekDay -> (Days Int)
+daysUntil tzo now end =
+  Days $ daysUntilIter 0 dateInZone end
+  where
+    dateInZone =
+      timeGetDate . HG.localTimeUnwrap . HG.localTimeSetTimezone tzo . runIntern $ now
+
+
+weekOf :: HG.Date -> (StartDate, EndDate)
+weekOf d
+  | getWeekDay d == weekStart = (Start d, End $ advanceDate (Days 6) d)
+  | otherwise = ((Start $ prevWeekStart d), (End $ advanceDate (Days 6) $ prevWeekStart d ))
+
+prevWeekStart :: HG.Date -> HG.Date
+prevWeekStart d
+  | getWeekDay d == weekStart = d
+  | otherwise = prevWeekStart $ advanceDate (Days (-1)) d
+
+
+weekStart :: WeekDay
+weekStart = Sunday
+
+
+
+instance FromJSON RawShiftTime where
+  parseJSON = withText "RawShiftTime" $ \str -> do
+    (hrs, mins) <- errHandler $ parse clockTimeParser "timeParser" str
+    ShiftTime <$> ((,) <$> readHours hrs <*> readMinutes mins) <*> pure localOffset
+      where errHandler :: Either ParseError (String, String) -> Parser (String, String)
+            errHandler (Right a) = pure a
+            errHandler (Left err) = fail $ "Error parsing hours: " <> show err
+
+            readHours :: MonadFail m => String -> m Int64
+            readHours hrs | Just hrsParsed <- readMaybe hrs = pure hrsParsed
+                          | otherwise = fail $ "Couldn't parse hours"
+
+            readMinutes :: MonadFail m => String -> m Int64
+            readMinutes mins | Just minsParsed <- readMaybe mins = pure minsParsed
+                             | otherwise = fail $ "Couldn't parse minutes"
+
+clockTimeParser :: ParsecT Text u Identity (String, String)
+clockTimeParser = do
+  h <- (try $ count 2 digit) <|> count 1 digit
+  _ <- char ':'
+  m <- count 2 digit
+  pure $ (h, m)
+
+
+instance FromJSON a => FromJSON (ShiftWeek a) where
+  parseJSON = withObject "ShiftWeek" $ \o ->
+    ShiftW
+      <$> o .: "monday"
+      <*> o .: "tuesday"
+      <*> o .: "wednesday"
+      <*> o .: "thursday"
+      <*> o .: "friday"
+      <*> o .: "saturday"
+      <*> o .: "sunday"
+
+
+instance FromJSON a => FromJSON (Period a) where
+  parseJSON = withArray "Period" $ \ary ->
+    Period
+    <$> (parseJSON $ ary ! 0)
+    <*> (parseJSON $ ary ! 1)
+    <*> (sequence $ parseJSON <$> ary !? 2)

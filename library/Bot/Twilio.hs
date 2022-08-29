@@ -1,22 +1,41 @@
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Bot.Twilio where
 
-import Data.Text (Text)
-import Data.Set (Set(..))
-import Bot.Time (InternTime(..))
-
-import Web.Internal.FormUrlEncoded (Form, unForm, FromForm(..))
-import Xmlbf (ToXml(..), element, text)
+import Bot.Time (InternTime (..))
+import Data.Aeson
+  ( FromJSON (..),
+    Result (..),
+    ToJSON (..),
+    Value (..),
+    decode,
+    encode,
+    fromJSON,
+    object,
+    pairs,
+    withArray,
+    withObject,
+    withText,
+    (.:),
+    (.:?),
+    (.=),
+  )
 import qualified Data.HashMap.Strict as HMap
+import Data.Set (Set (..))
+import Data.Text (Text)
 import qualified Data.Text.Lazy as LText
+import Data.Yaml (decodeFileThrow, encodeFile)
+import LoadEnv (loadEnv)
+import System.Environment (getEnv)
+import Web.Internal.FormUrlEncoded (Form, FromForm (..), unForm)
+import Xmlbf (ToXml (..), element, text)
 
 data TwilioCallResponse = TCallResp Text
 data TwilioMsgResponse = TMsgResp Text
@@ -85,3 +104,25 @@ instance FromForm TwilioCallData where
         pure $ TCallData (head from) (head to)
 
       handleErr = maybe (Left "Failure parsing twilio call form-data") Right
+
+loadContacts :: IO [Contact]
+loadContacts = decodeFileThrow . (<> "/contacts.yml") =<< configDir
+
+configDir :: IO String
+configDir = loadEnv >> getEnv "CONFIG_DIR"
+
+instance FromJSON Contact where
+  parseJSON = withObject "Contact" $ \o ->
+    Contact
+    <$> o .: "name"
+    <*> o .: "number"
+    <*> o .: "suspendUntil"
+    <*> o .: "id"
+    <*> o .: "roles"
+
+instance FromJSON ContactRole where
+  parseJSON = withText "ContactRole" $ \t ->
+    case t of
+      "weekly" -> pure WeeklyRole
+      "annex" -> pure AnnexRole
+      _ -> fail "expecting a valid contact role"

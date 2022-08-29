@@ -1,6 +1,6 @@
 module Alert.Week where
 
-import Example (gapsThisWeekAlert)
+import Bot.Alert (gapsThisWeekAlert)
 
 main :: IO ()
 main = gapsThisWeekAlert

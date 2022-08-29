@@ -1,47 +1,120 @@
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -fwarn-unused-do-bind #-}
 
 module Bot.Cal where
 
-import Data.List (groupBy)
-import Data.Text (Text)
-import Bot.Time (
-  PeriodIntern(..)
-  , InternTime(..)
-  , Period(..)
-  , Date(..)
-  , ShiftWeek(..)
-  , TimezoneOffset(..)
-  , TimeOfDay
-  , ISO8601
-  , Minutes
-  , Covered(..)
-  , Days(..)
-  , StartTime
-  , Start(..)
-  , End(..)
-  , EndTime
-  , StartDate
-  , EndDate
-  , ShiftWeekTime
-  , ShiftWeekRaw
-  , RawShiftTime
-  , ShiftTimeOfDay
-  -- , WeekDay(..)
-  , internToDate
-  , periodDuration
-  , periodTimeToElapsed
+import Bot.Time
+  ( Covered (..),
+    Date (..),
+    Days (..),
+    End (..),
+    EndDate,
+    EndTime,
+    Gaps (..),
+    ISO8601 (..),
+    ISO8601Error (..),
+    InternTime (..),
+    Minutes,
+    Period (..),
+    PeriodIntern (..),
+    RawShiftTime,
+    ShiftTimeOfDay,
+    ShiftWeek (..),
+    ShiftWeekRaw,
+    ShiftWeekTime,
+    Start (..),
+    StartDate,
+    StartTime,
+    TimeOfDay,
+    TimezoneOffset (..),
+    -- , WeekDay(..)
+
+    datesFromTo,
+    internToDate,
+    parse8601,
+    periodDuration,
+    periodTimeToElapsed,
+    runIntern,
+    show8601UTC,
+    validateShiftWeek,
   )
+import Bot.Twilio (configDir)
+import Control.Exception (Exception, throwIO)
+import Control.Lens
+  ( Identity,
+    contains,
+    preview,
+    (&),
+    (.~),
+    (?~),
+    (^?),
+  )
+import Data.Aeson
+  ( FromJSON (..),
+    Result (..),
+    ToJSON (..),
+    Value (..),
+    decode,
+    encode,
+    fromJSON,
+    object,
+    pairs,
+    withArray,
+    withObject,
+    withText,
+    (.:),
+    (.:?),
+    (.=),
+  )
+import Data.Aeson.Lens (key)
+import Data.ByteString.Char8 (ByteString)
+import Data.Foldable (asum)
 import qualified Data.Hourglass as HG
 import Data.Int (Int64)
+import Data.List (groupBy)
 import qualified Data.Map as Map
+import Data.Maybe (catMaybes)
+import Data.Text (Text, pack, replace, strip, toLower, unpack)
+import Data.Text.Encoding (encodeUtf8)
+import Data.Yaml (decodeFileThrow, encodeFile)
+import LoadEnv (loadEnv)
+import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
+import Network.Wreq
+  ( FormParam (..),
+    auth,
+    defaults,
+    getWith,
+    oauth2Bearer,
+    param,
+    post,
+    postWith,
+    responseBody,
+  )
+import System.Environment (getEnv)
+import Text.Parsec
+  ( ParseError,
+    ParsecT,
+    anyChar,
+    char,
+    count,
+    digit,
+    many,
+    manyTill,
+    parse,
+    spaces,
+    string,
+    try,
+    (<|>),
+  )
+
+newtype JWTException = JWTException String
 
 -- todo: refactor to use Period
 data GCalEvent a = GCalEvent
@@ -174,24 +247,6 @@ pickShiftSelector HG.Friday    = wkFri
 pickShiftSelector HG.Saturday  = wkSat
 pickShiftSelector HG.Sunday    = wkSun
 
-datesFromTo :: StartDate -> EndDate -> [Date]
-datesFromTo (Start d1) (End d2)
-  | d1 < d2   = d1 : datesFromTo (Start . nextDate $ d1) (End d2)
-  | otherwise = [d2]
-
-advanceDate :: Days Int -> Date -> Date
-advanceDate (Days n) =
-  flip HG.dateAddPeriod day
-  where
-    day = HG.Period
-      { HG.periodYears = 0
-      , HG.periodMonths = 0
-      , HG.periodDays = n
-      }
-
-nextDate :: Date -> Date
-nextDate = advanceDate . Days $ 1
-
 groupByDate :: TimezoneOffset -> [GCalEventI] -> [(Date, [GCalEventI])]
 groupByDate tzo = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
   where
@@ -201,3 +256,178 @@ groupByDate tzo = fmap addDate . groupBy (\a b -> eventDate a == eventDate b)
 
 periodize :: GCalEventI -> PeriodIntern
 periodize e = Period (gCalStart e) (gCalEnd e) Nothing
+
+-- TODO: deal with paginated results (`nextPageToken`)
+-- if we don't have the "singleEvents" query param set, then we might get
+-- recurring dates before the earliest date we request
+getEventsForCal :: CalId String -> (StartTime, EndTime) -> IO [RawGCalEvent]
+getEventsForCal (CalId cid) ((Start start), (End end)) = do
+  let (fmtMin, fmtMax) = (show8601UTC start, show8601UTC end)
+  loadEnv
+  token <- getAuthToken =<< googleJWT
+  let reqOpts = defaults
+             & auth ?~ oauth2Bearer token
+             & param "orderBy" .~ ["startTime"]
+             & param "singleEvents" .~ ["true"]
+             & param "timeMin" .~ [fmtMin]
+             & param "timeMax" .~ [fmtMax]
+             & param "maxResults" .~ ["2500"]
+  resp <- getWith reqOpts $ url cid
+  let mEvents = fromJSON <$> preview (responseBody . key "items") resp
+  catMaybes <$> (unwrapEvents mEvents)
+  where url calID = "https://www.googleapis.com/calendar/v3/calendars/"
+          <> calID
+          <> "/events"
+
+unwrapResult :: Maybe (Result Text) -> Maybe ByteString
+unwrapResult (Just (Success txt)) = Just . encodeUtf8 $ txt
+unwrapResult _ = Nothing
+
+getAuthToken :: SignedJWT -> IO ByteString
+getAuthToken jwt = do
+  resp <- post "https://www.googleapis.com/oauth2/v4/token"
+    [
+      "grant_type" := grantString
+    , "assertion" := show jwt
+    ]
+  mToken <- pure $ unwrapResult $ fmap fromJSON $ resp ^? responseBody . key "access_token"
+  maybe (throwIO GAuthTokenException) pure $ mToken
+  where
+    grantString = "urn:ietf:params:oauth:grant-type:jwt-bearer" :: Text
+
+googleJWT :: IO SignedJWT
+googleJWT = do
+  email <- getAcctEmail
+  pem <- fromPEMString =<< getPEM
+  jwt <- getSignedJWT email Nothing [calAuth] Nothing pem
+  either (throwIO . JWTException) pure jwt
+  where
+    calAuth = "https://www.googleapis.com/auth/calendar"
+
+unwrapEvents :: Maybe (Result [Maybe RawGCalEvent]) -> IO [Maybe RawGCalEvent]
+unwrapEvents (Just (Success events)) = pure events
+unwrapEvents err = throwIO $ ResponseErrorGCalEvents $ show err
+
+getAcctEmail :: IO Text
+getAcctEmail = getEnv acctVar >>= pure . pack
+  where acctVar = "GOOGLE_SERVICE_ACCT_EMAIL"
+
+
+getPEM :: IO String
+getPEM = do
+  rawPem <- getEnv keyVar
+  -- getEnv adds an extra escape to the newlines, so we remove those
+  let pem = unpack $ replace "\\n" "\n" $ pack rawPem
+  pure $ pem
+  where
+    keyVar = "GOOGLE_ACCT_KEY"
+
+instance FromJSON a => FromJSON (GCalEvent a) where
+  parseJSON = withObject "GCalEvent" $ \o ->
+    GCalEvent
+      <$> o .:? "summary"
+      <*> o .:? "description"
+      <*> o .: "start"
+      <*> o .: "end"
+
+instance Exception ResponseErrorGCalEvents
+
+instance Show ResponseErrorGCalEvents where
+  show (ResponseErrorGCalEvents a) =
+    "Error: in google calandar response: " <> show a
+
+instance Exception JWTException
+
+instance Show JWTException where
+  show (JWTException str) = "Error creating JWT: " <> show str
+
+instance Exception GAuthTokenException
+
+instance Show GAuthTokenException where
+  show GAuthTokenException = "Error fetching google auth token"
+
+-- TODO: Use timezone from cal to finish date?
+-- or GADT to construct different type depending on date or datetime presence?
+-- (can GADTs be used to parse (GCalEvent (ISO8601 Text)) OR (GCalEvent Date)?
+instance FromJSON (ISO8601 Text) where
+  parseJSON = withObject "GCalDateTime" $ \v -> do
+     dt <- v .:? "dateTime"
+     -- this is a hack to avoid solving the issue of how to handle parsing all-day events
+     d <- (fmap.fmap) (<> "T00:00:00Z") (v .:? "date")
+     case asum [dt, d] of
+       Just date -> pure $ ISO8601 date
+       Nothing -> fail "couldn't find \"dateTime\" or \"date\" in google calendar event"
+
+validateGCalEvent :: RawGCalEvent -> Either ISO8601Error GCalEventI
+validateGCalEvent (GCalEvent smry dsc end st) =
+  GCalEvent
+  <$> pure (toLower . strip <$> smry)
+  <*> pure (toLower . strip <$> dsc)
+  <*> (parse8601 end)
+  <*> (parse8601 st)
+
+validateGCalEvent' :: RawGCalEvent -> IO GCalEventI
+validateGCalEvent' = either throwIO pure . validateGCalEvent
+
+getMainLocCalId :: IO (CalId String)
+getMainLocCalId = CalId <$> getEnv "MAIN_LOC_STAFFING_GCAL_ID"
+
+hasOverlap :: [GCalEventI] -> GCalEventI -> Bool
+hasOverlap onCal newEvent = ([eventPeriod] /=) $ dayGetGaps [eventPeriod] onCal
+  where
+    eventPeriod :: PeriodIntern
+    eventPeriod = periodize newEvent
+
+-- TODO: Read in TZ
+loadShifts :: IO ShiftWeekTime
+loadShifts = validateShiftWeek <$> (decodeFileThrow . (<> "/schedule.yml") =<< configDir)
+
+
+nameParser :: Text -> ParsecT Text u Identity [String]
+nameParser name = traverse (\part -> manyTill anyChar $ string part) nameParts
+  where
+    nameParts = words . unpack . toLower $ name
+
+eventDuration :: GCalEventI -> (Minutes, HG.Seconds)
+eventDuration a = HG.fromSeconds $ HG.timeDiff (inUTC . gCalEnd $ a) (inUTC . gCalStart $ a)
+    where
+    inUTC = HG.localTimeUnwrap . runIntern
+
+minGapDuration :: Minutes
+minGapDuration = 65
+
+totalDuration :: Foldable f => f GCalEventI -> (Minutes, HG.Seconds)
+totalDuration = foldr sumMS (0,0)
+  where
+    sumMS :: GCalEventI -> (Minutes, HG.Seconds) -> (Minutes, HG.Seconds)
+    sumMS e t = ((fst (eventDuration e) + fst t), (snd (eventDuration e) + snd t))
+
+-- used to aggregate staffer hours
+eventBySummDuration :: Foldable f => f GCalEventI -> [(Text, HG.Hours, Minutes)]
+eventBySummDuration  =
+  fmap reshapeTime
+  . Map.toList
+  . foldr bySummary Map.empty
+  where
+    bySummary :: GCalEvent InternTime -> Map.Map Text (Minutes, HG.Seconds) -> Map.Map Text (Minutes, HG.Seconds)
+    bySummary e  =
+      Map.insertWith
+      sumMS
+      (maybe " " (toLower . strip) . gCalSummary $ e)
+      $ eventDuration e
+
+    reshapeTime :: (Text, (Minutes, HG.Seconds)) -> (Text, HG.Hours, Minutes)
+    reshapeTime (summ, (m, s)) =
+      (summ, (fst $ toHours m s), (snd $ toHours m s))
+
+    sumMS :: (Minutes, HG.Seconds) -> (Minutes, HG.Seconds) -> (Minutes, HG.Seconds)
+    sumMS (m1, s1) (m2, s2) = (m1 + m2, s1 + s2)
+
+toHours :: Minutes -> HG.Seconds -> (HG.Hours, Minutes)
+toHours m s =
+  let
+    totalSeconds = (HG.toSeconds m) + s
+    (hours, remSecs) = HG.fromSeconds totalSeconds :: (HG.Hours, HG.Seconds)
+    (mins, _) = HG.fromSeconds remSecs :: (Minutes, HG.Seconds)
+  in
+    (hours, mins)
