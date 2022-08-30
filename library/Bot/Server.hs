@@ -11,7 +11,7 @@
 module Bot.Server where
 
 import Bot.Cal
-  ( GCalEventI (..),
+  ( GCalEventI,
     gCalDesc,
     gCalEnd,
     gCalStart,
@@ -32,18 +32,13 @@ import Bot.Time
     DisplayMonthDate (..),
     End (..),
     Gaps (..),
-    InternTime (..),
-    IxGaps (..),
+    InternTime,
+    IxGaps,
     Period (..),
-    PeriodIntern (..),
-    RawShiftTime (..),
-    ShiftTime (..),
-    ShiftWeek (..),
-    ShiftWeekTime (..),
+    PeriodIntern,
     Start (..),
     advanceDate,
     daysUntil,
-    daysUntilIter,
     displayTZ,
     getCurrentTime,
     getInternTime',
@@ -51,7 +46,6 @@ import Bot.Time
     internToLocal,
     localOffset,
     show8601UTC,
-    validateShiftWeek,
     weekStart,
   )
 import Bot.Twilio
@@ -61,59 +55,38 @@ import Bot.Twilio
     loadContacts,
   )
 import Control.Concurrent.STM.TVar (TVar, newTVar, readTVar, writeTVar)
-import Control.Lens (Identity, preview, (&), (.~), (?~), (^?))
+import Control.Lens (Identity, (&), (?~))
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.STM (atomically)
 import Control.Monad.Trans.Reader (ReaderT (..), ask)
 import Data.Aeson
-  ( FromJSON (..),
-    Result (..),
-    ToJSON (..),
+  ( ToJSON (..),
     Value (..),
     decode,
     encode,
-    fromJSON,
     object,
     pairs,
-    withArray,
-    withObject,
-    withText,
-    (.:),
-    (.:?),
     (.=),
   )
-import Data.Aeson.Types (Parser)
 import Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Char (ord)
 import qualified Data.HashMap.Strict as HMap
 import qualified Data.Hourglass as HG
-import Data.Int (Int64)
 import Data.List (find, foldl')
 import qualified Data.Map as Map
-import Data.Text (Text (..), find, pack, replace, strip, toLower, unpack)
+import Data.Text (Text, toLower, unpack)
 import qualified Data.Text as Text
 import qualified Data.Text.Lazy as LText
-import Data.Vector ((!), (!?))
 import Data.Yaml (decodeFileThrow, encodeFile)
 import LoadEnv (loadEnv)
 import qualified Network.URI.Encode as URI
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setLogger, setPort)
 import Network.Wai.Logger (withStdoutLogger)
-import Network.Wreq
-  ( FormParam (..),
-    auth,
-    defaults,
-    getWith,
-    oauth2Bearer,
-    param,
-    post,
-    postWith,
-    responseBody,
-  )
-import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
+import Network.Wreq (auth, defaults, oauth2Bearer, postWith, )
+import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty,)
 import Prettyprinter.Render.Text (renderStrict)
 import Servant
   ( Application,
@@ -136,14 +109,11 @@ import Servant.XML
 import System.Environment (getEnv)
 import Test.QuickCheck (elements, generate)
 import Text.Parsec
-  ( ParseError,
-    ParsecT,
-    anyChar,
+  ( ParsecT,
     char,
     count,
     digit,
     many,
-    manyTill,
     parse,
     spaces,
     string,
@@ -153,7 +123,7 @@ import Text.Parsec
 import Text.RawString.QQ (r)
 import Text.Read (readMaybe)
 import Web.Cookie
-import Web.Cookie (parseCookies)
+--import Web.Cookie (parseCookies)
 import Web.HttpApiData (parseHeader)
 import Web.Internal.FormUrlEncoded (Form, FromForm (..), unForm)
 import Xmlbf (ToXml (..), element, text)
@@ -280,10 +250,10 @@ performCmd (ClaimShift contact period) = do
 
 performCmd (Suspend c d) = do
   today <- liftIO getToday
-  let until = advanceDate d <$> today
+  let until' = advanceDate d <$> today
       msg = pretty ("Notifications silenced until: " :: Text)
-            <> (pretty . DisplayMonthDate . displayTZ localOffset $ until)
-  liftIO $ suspendContact c $ getInternTime' until
+            <> (pretty . DisplayMonthDate . displayTZ localOffset $ until')
+  liftIO $ suspendContact c $ getInternTime' until'
   pure $ destroyCookie $ twimlMsg $ textRender $ msg
 
 performCmd Help = pure $ destroyCookie $ twimlMsg $ toText helpText

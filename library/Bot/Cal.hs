@@ -12,30 +12,21 @@ module Bot.Cal where
 
 import Bot.Time
   ( Covered (..),
-    Date (..),
-    Days (..),
+    Date,
     End (..),
-    EndDate,
     EndTime,
     Gaps (..),
     ISO8601 (..),
     ISO8601Error (..),
-    InternTime (..),
+    InternTime,
     Minutes,
     Period (..),
-    PeriodIntern (..),
-    RawShiftTime,
-    ShiftTimeOfDay,
+    PeriodIntern,
     ShiftWeek (..),
-    ShiftWeekRaw,
     ShiftWeekTime,
     Start (..),
-    StartDate,
     StartTime,
-    TimeOfDay,
-    TimezoneOffset (..),
-    -- , WeekDay(..)
-
+    TimezoneOffset,
     datesFromTo,
     internToDate,
     parse8601,
@@ -49,7 +40,6 @@ import Bot.Twilio (configDir)
 import Control.Exception (Exception, throwIO)
 import Control.Lens
   ( Identity,
-    contains,
     preview,
     (&),
     (.~),
@@ -59,31 +49,21 @@ import Control.Lens
 import Data.Aeson
   ( FromJSON (..),
     Result (..),
-    ToJSON (..),
-    Value (..),
-    decode,
-    encode,
     fromJSON,
-    object,
-    pairs,
-    withArray,
     withObject,
-    withText,
     (.:),
     (.:?),
-    (.=),
   )
 import Data.Aeson.Lens (key)
 import Data.ByteString.Char8 (ByteString)
 import Data.Foldable (asum)
 import qualified Data.Hourglass as HG
-import Data.Int (Int64)
 import Data.List (groupBy)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text, pack, replace, strip, toLower, unpack)
 import Data.Text.Encoding (encodeUtf8)
-import Data.Yaml (decodeFileThrow, encodeFile)
+import Data.Yaml (decodeFileThrow)
 import LoadEnv (loadEnv)
 import Network.Google.OAuth2.JWT (SignedJWT, fromPEMString, getSignedJWT)
 import Network.Wreq
@@ -94,25 +74,10 @@ import Network.Wreq
     oauth2Bearer,
     param,
     post,
-    postWith,
     responseBody,
   )
 import System.Environment (getEnv)
-import Text.Parsec
-  ( ParseError,
-    ParsecT,
-    anyChar,
-    char,
-    count,
-    digit,
-    many,
-    manyTill,
-    parse,
-    spaces,
-    string,
-    try,
-    (<|>),
-  )
+import Text.Parsec (ParsecT, anyChar, manyTill, string)
 
 newtype JWTException = JWTException String
 

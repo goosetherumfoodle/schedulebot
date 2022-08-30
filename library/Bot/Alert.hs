@@ -13,7 +13,7 @@ module Bot.Alert where
 import Bot.Cal
   ( CalId (..),
     GCalEvent (..),
-    GCalEventI (..),
+    GCalEventI,
     StoreEvent (..),
     getAllGapsAllDay,
     getEventsForCal,
@@ -24,17 +24,14 @@ import Bot.Cal
   )
 import Bot.Time
   ( Covered (..),
-    DateTime (..),
     DisplayTZ,
     Elapsed,
     End (..),
     Gaps (..),
-    InternTime (..),
+    InternTime,
     LocalTime,
     Period (..),
-    ShiftWeekTime (..),
     Start (..),
-    TimeOfDay (..),
     getInternTime',
     getToday,
     getTomorrow,
@@ -43,7 +40,6 @@ import Bot.Time
     localTimeGetTimezone,
     localTimeUnwrap,
     nextDate,
-    validateShiftWeek,
     weekOf,
     weekStart,
   )
@@ -53,33 +49,23 @@ import Bot.Twilio
     ContactRole (..),
     loadContacts,
   )
-import Control.Lens (Identity, preview, (&), (.~), (?~), (^?))
+import Control.Lens (Identity)
 import Control.Monad.IO.Class (liftIO)
 import Data.Hourglass (localTime)
 import qualified Data.Hourglass as HG
-import Data.Int (Int64)
-import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text (..), pack, replace, strip, toLower, unpack)
-import Data.Yaml (decodeFileThrow, encodeFile)
+import Data.Text (Text, pack, toLower, unpack)
 import LoadEnv (loadEnv)
-import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty, vsep, (<+>))
+import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
+import Prettyprinter.Internal (Doc)
 import System.Environment (getEnv)
 import Text.Parsec
-  ( ParseError,
-    ParsecT,
+  ( ParsecT,
     anyChar,
-    char,
-    count,
-    digit,
-    many,
     manyTill,
     parse,
-    spaces,
     string,
-    try,
-    (<|>),
   )
 import Twilio (runTwilio')
 import Twilio.Messages (PostMessage (..))
@@ -288,6 +274,7 @@ toText = textRender . pretty
 configDir :: IO String
 configDir = loadEnv >> getEnv "CONFIG_DIR"
 
+textRender :: Prettyprinter.Internal.Doc ann -> Text
 textRender = renderStrict . layoutPretty defaultLayoutOptions
 
 sendSmsTo :: [Active Contact] -> Text -> IO ()
