@@ -1,6 +1,6 @@
 module Alert.Nag where
 
-import Example (nagAlert)
+import Bot.Alert (nagAlert)
 
 main :: IO ()
 main = nagAlert

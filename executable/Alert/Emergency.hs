@@ -1,6 +1,6 @@
 module Alert.Emergency where
 
-import Example (mainLocEmergencySMS)
+import Bot.Alert (mainLocEmergencySMS)
 
 main :: IO ()
 main = mainLocEmergencySMS

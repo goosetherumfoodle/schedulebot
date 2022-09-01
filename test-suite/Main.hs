@@ -8,10 +8,16 @@ import Data.Yaml (decodeEither')
 import Data.Yaml.Internal (ParseException)
 import Text.RawString.QQ (r)
 import Data.Hourglass hiding (Period)
+import qualified Data.Hourglass as HG
 import Data.Text (Text)
 import qualified Data.Set as Set
 
-import Example
+import Bot.Cal
+import Bot.Time
+import Bot.Twilio
+import Bot.Alert
+import Bot.Server
+
 
 main :: IO ()
 main = do
@@ -161,18 +167,18 @@ sunday:
 
   describe "groupByDate" $ do
     it "groups events by day" $ do
-      let firstDay = Date {dateYear = 2018, dateMonth = October, dateDay = 8}
-          secondDay = Date {dateYear = 2018, dateMonth = October, dateDay = 9}
-          firstTime = TimeOfDay {todHour = 0, todMin = 41, todSec = 5, todNSec = 0}
-          secondTime = TimeOfDay {todHour = 2, todMin = 41, todSec = 5, todNSec = 0}
-          thirdTime = TimeOfDay {todHour = 4, todMin = 41, todSec = 5, todNSec = 0}
-          fourthTime = TimeOfDay {todHour = 6, todMin = 41, todSec = 5, todNSec = 0}
-          p1Start = internTimeFromLocalOffset $ DateTime firstDay firstTime
-          p1End = internTimeFromLocalOffset $ DateTime firstDay secondTime
-          p2Start = internTimeFromLocalOffset $ DateTime firstDay thirdTime
-          p2End = internTimeFromLocalOffset $ DateTime firstDay fourthTime
-          p3Start = internTimeFromLocalOffset $ DateTime secondDay firstTime
-          p3End = internTimeFromLocalOffset $ DateTime secondDay secondTime
+      let firstDay = HG.Date {dateYear = 2018, dateMonth = October, dateDay = 8}
+          secondDay = HG.Date {dateYear = 2018, dateMonth = October, dateDay = 9}
+          firstTime = HG.TimeOfDay {todHour = 0, todMin = 41, todSec = 5, todNSec = 0}
+          secondTime = HG.TimeOfDay {todHour = 2, todMin = 41, todSec = 5, todNSec = 0}
+          thirdTime = HG.TimeOfDay {todHour = 4, todMin = 41, todSec = 5, todNSec = 0}
+          fourthTime = HG.TimeOfDay {todHour = 6, todMin = 41, todSec = 5, todNSec = 0}
+          p1Start = internTimeFromLocalOffset $ HG.DateTime firstDay firstTime
+          p1End = internTimeFromLocalOffset $ HG.DateTime firstDay secondTime
+          p2Start = internTimeFromLocalOffset $ HG.DateTime firstDay thirdTime
+          p2End = internTimeFromLocalOffset $ HG.DateTime firstDay fourthTime
+          p3Start = internTimeFromLocalOffset $ HG.DateTime secondDay firstTime
+          p3End = internTimeFromLocalOffset $ HG.DateTime secondDay secondTime
           e1 = GCalEvent (Just "first event") Nothing p1Start p1End
           e2 = GCalEvent (Just "second event") Nothing p2Start p2End
           e3 = GCalEvent (Just "third event") Nothing p3Start p3End
@@ -184,12 +190,12 @@ sunday:
   describe "shrinkGap" $ do
     context "with a pior partially overlapping gap" $ do
       it "creates a gap that's the size of the gap not covered by the event" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 0 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 0 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 5 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 30 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 1 30 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 7 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
             expectedGap = Period gapStart eventStart Nothing
@@ -198,12 +204,12 @@ sunday:
 
     context "with a post partially overlapping gap" $ do
       it "creates a gap that's the size of the gap not covered by the event" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 2 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 2 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 5 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 0 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 0 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
             expectedGap = Period eventEnd gapEnd Nothing
@@ -213,60 +219,60 @@ sunday:
   describe "gapRel" $ do
     context "with a gap prior to an event" $ do
       it "is PriorGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 13 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 15 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 13 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 15 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` PriorGap
 
     context "with a gap after to an event" $ do
       it "is PostGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 0 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 0 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` PostGap
 
     context "with a gap that is a strict-subset of an event" $ do
       it "is SubsetGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` SubsetGap
 
     context "with a gap that is equal to an event" $ do
       it "is SubsetGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` SubsetGap
 
     context "with a gap that is a strict-superset of an event" $ do
       it "is StrictSupersetGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 2 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 2 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` StrictSupersetGap
@@ -274,61 +280,61 @@ sunday:
   describe "intersectGap" $ do
     context "with a prior gap that intersects an event" $ do
       it "is an IntersectGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 5 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
     context "with a prior gap and equal ending" $ do
       it "is an intersectGap" $ do
-        let baseDate = Date {dateYear = 2018, dateMonth = March, dateDay = 4}
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate $ TimeOfDay 10 30 0 0
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 16 0 0 0)
+        let baseDate = HG.Date {dateYear = 2018, dateMonth = March, dateDay = 4}
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate $ HG.TimeOfDay 10 30 0 0
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 16 0 0 0)
             gap = Period {periodStart = gapStart, periodEnd = gapEnd, periodName = Nothing}
 
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate $ TimeOfDay 12 0 0 0
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate $ TimeOfDay 16 0 0 0
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate $ HG.TimeOfDay 12 0 0 0
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate $ HG.TimeOfDay 16 0 0 0
             event = GCalEvent {gCalSummary = (Just "event 2"), gCalDesc = Nothing, gCalStart = eventStart, gCalEnd = eventEnd}
 
         gapRel gap event `shouldBe` IntersectGap
 
     context "with a post gap that intersects an event" $ do
       it "is an IntersectGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 7 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 5 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
     context "with a post gap and equal start" $ do
       it "is an IntersectGap" $ do
-        let baseDate = Date 01 January 1999
-            gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 7 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
             gap = Period gapStart gapEnd Nothing
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 7 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 7 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         gapRel gap event `shouldBe` IntersectGap
 
   describe "splitGap" $ do
     it "splits a gap by a (strict-subset) event" $ do
-      let baseDate = Date 01 January 1999
-          gapStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 0 0 0)
-          gapEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+      let baseDate = HG.Date 01 January 1999
+          gapStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 1 0 0 0)
+          gapEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
           gap = Period gapStart gapEnd Nothing
-          eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 5 0 0 0)
-          eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 0 0 0)
+          eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 5 0 0 0)
+          eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 0 0 0)
           event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
           expectedFirst = Period gapStart eventStart Nothing
@@ -339,50 +345,50 @@ sunday:
   describe "alterGaps" $ do
     context "with an event that's in-between gaps" $ do
       it "doesn't alter the gaps" $ do
-        let baseDate = Date { dateDay = 01, dateMonth = January, dateYear = 1999 }
-            gap1Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 0 0 0)
-            gap1End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
+        let baseDate = HG.Date { dateDay = 01, dateMonth = January, dateYear = 1999 }
+            gap1Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 1 0 0 0)
+            gap1End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
             gap1 = Period gap1Start gap1End (Just "gap 1")
-            gap2Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            gap2End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+            gap2Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
+            gap2End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
             gap2 = Period gap2Start gap2End (Just "gap 2")
 
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 4 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 8 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 4 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 8 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1, gap2]
 
     context "with an event that covers one of the gaps" $ do
       it "removes that gap" $ do
-        let baseDate = Date 01 January 1999
-            gap1Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 0 0 0)
-            gap1End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
+        let baseDate = HG.Date 01 January 1999
+            gap1Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 1 0 0 0)
+            gap1End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
             gap1 = Period gap1Start gap1End (Just "gap 1")
-            gap2Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            gap2End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+            gap2Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
+            gap2End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
             gap2 = Period gap2Start gap2End (Just "gap 2")
 
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 14 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 14 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1]
 
     context "with an event that partially covers one of the gaps" $ do
       it "removes that gap" $ do
-        let baseDate = Date { dateDay = 01, dateMonth = January, dateYear = 1999 }
+        let baseDate = HG.Date { dateDay = 01, dateMonth = January, dateYear = 1999 }
 
-            gap1Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 1 0 0 0)
-            gap1End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 3 0 0 0)
+            gap1Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 1 0 0 0)
+            gap1End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 3 0 0 0)
             gap1 = Period gap1Start gap1End (Just "gap 1")
 
-            gap2Start = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 9 0 0 0)
-            gap2End = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 12 0 0 0)
+            gap2Start = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 9 0 0 0)
+            gap2End = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 12 0 0 0)
             gap2 = Period gap2Start gap2End (Just "gap 2")
 
-            eventStart = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 10 20 0 0)
-            eventEnd = internTimeFromLocalOffset $ DateTime baseDate (TimeOfDay 13 0 0 0)
+            eventStart = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 10 20 0 0)
+            eventEnd = internTimeFromLocalOffset $ HG.DateTime baseDate (HG.TimeOfDay 13 0 0 0)
             event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
         alterGaps event [gap1, gap2] `shouldBe` [gap1, Period gap2Start eventStart Nothing]
@@ -402,26 +408,26 @@ sunday:
                 [
                   Period {
                     periodName = Nothing
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               }
 
-            sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+            sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-            event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-            event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+            event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+            event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
             event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
-            event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-            event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
+            event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
+            event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 0 0 0)
             event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
             events = [event1, event2]
 
-            gapStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
-            gapEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+            gapStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 0 0 0)
+            gapEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
             expectedGap = Period gapStart gapEnd Nothing
 
             dateRange = ( Start . internTimeFromLocalOffset $ sunday
@@ -446,50 +452,50 @@ sunday:
                 [
                   Period {
                     periodName = Nothing
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               , wkSun =
                 [
                   Period {
                     periodName = Nothing
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
           event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
-          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
+          event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
+          event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 0 0 0)
           event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
           sundayEvents = [event1, event2]
 
-          gap1Start = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 14 0 0 0)
-          gap1End = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 16 0 0 0)
+          gap1Start = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 14 0 0 0)
+          gap1End = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 16 0 0 0)
           expectedGap1 = Period gap1Start gap1End Nothing
 
-          friday = Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
+          friday = HG.Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
 
-          event3Start = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 10 30 0 0)
-          event3End = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 12 0 0 0)
+          event3Start = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 10 30 0 0)
+          event3End = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 12 0 0 0)
           event3 = GCalEvent (Just "event 3") Nothing event3Start event3End
 
-          event4Start = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 12 0 0 0)
-          event4End = internTimeFromLocalOffset $ DateTime friday (TimeOfDay 14 0 0 0)
+          event4Start = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 12 0 0 0)
+          event4End = internTimeFromLocalOffset $ HG.DateTime friday (HG.TimeOfDay 14 0 0 0)
           event4 = GCalEvent (Just "event 4") Nothing event4Start event4End
 
           fridayEvents = [event3, event4]
 
-          gap2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
-          gap2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+          gap2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 0 0 0)
+          gap2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
           expectedGap2 = Period gap2Start gap2End Nothing
 
           dateRange = ( Start . internTimeFromLocalOffset $ friday
@@ -515,26 +521,26 @@ sunday:
                 [
                   Period {
                     periodName = Nothing
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
           event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
-          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
-          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+          event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
+          event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
           event2 = GCalEvent (Just "event 2") Nothing event2Start event2End
 
           sundayEvents = [event1, event2]
           dateRange = (
-              Start . internTimeFromLocalOffset $ Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
-            , End . internTimeFromLocalOffset $  Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
+              Start . internTimeFromLocalOffset $ HG.Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
+            , End . internTimeFromLocalOffset $  HG.Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
             )
 
           results = getAllGapsInRange localOffset shifts dateRange sundayEvents
@@ -555,17 +561,17 @@ sunday:
               , wkSun = []
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
           event1 = GCalEvent (Just "event 1") Nothing event1Start event1End
 
           sundayEvents = [ event1 ]
 
           dateRange = (
-              Start . internTimeFromLocalOffset $ Date { dateDay = 01, dateMonth = March, dateYear = 2018 }
-            , End . internTimeFromLocalOffset $ Date { dateDay = 10, dateMonth = March, dateYear = 2018 }
+              Start . internTimeFromLocalOffset $ HG.Date { dateDay = 01, dateMonth = March, dateYear = 2018 }
+            , End . internTimeFromLocalOffset $ HG.Date { dateDay = 10, dateMonth = March, dateYear = 2018 }
                       )
           results = getAllGapsInRange localOffset shifts dateRange sundayEvents
 
@@ -577,8 +583,8 @@ sunday:
           sundayShift = Period
             {
               periodName = Just "sunday shift"
-            , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-            , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+            , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+            , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
             }
           shifts = ShiftW
               {
@@ -591,9 +597,9 @@ sunday:
               , wkSun = [ sundayShift ]
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-          gapStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-          gapEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          gapStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+          gapEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
           expectedGap = Period gapStart gapEnd $ Just "sunday shift"
 
           start = Start . internTimeFromLocalOffset $ sunday
@@ -620,25 +626,25 @@ sunday:
                 [
                   Period {
                     periodName = Just "small gap"
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 11) (Minutes 0) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 11) (Minutes 0) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               , wkSun =
                 [
                   Period {
                     periodName = Just "large gap"
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-          friday = Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          friday = HG.Date { dateDay = 02, dateMonth = March, dateYear = 2018 }
 
-          gap2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 30 0 0)
-          gap2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+          gap2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 30 0 0)
+          gap2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
           expectedGap2 = Period gap2Start gap2End $ Just "large gap"
 
           dateRange = ( Start . internTimeFromLocalOffset $ friday
@@ -655,13 +661,13 @@ sunday:
     it "selects all shifts that start in the range" $ do
       let firstExpected = Period {
             periodName = Just "first"
-            , periodStart = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 0) (Seconds 0) (NanoSeconds 0))
-            , periodEnd = shiftTimeWZone (TimeOfDay (Hours 21) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+            , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 0) (Seconds 0) (NanoSeconds 0))
+            , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 21) (Minutes 00) (Seconds 0) (NanoSeconds 0))
             }
           secondExpected = Period {
             periodName = Just "second"
-            , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-            , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+            , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+            , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
             }
           shifts = ShiftW
               {
@@ -671,8 +677,8 @@ sunday:
                     secondExpected
                   , Period {
                     periodName = Just "after"
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 0) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 21) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 0) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 21) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 ]
               , wkWed = []
@@ -683,18 +689,18 @@ sunday:
                 [
                   Period {
                     periodName = Just "prior"
-                    , periodStart = shiftTimeWZone (TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
-                    , periodEnd = shiftTimeWZone (TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
+                    , periodStart = shiftTimeWZone (HG.TimeOfDay (Hours 10) (Minutes 30) (Seconds 0) (NanoSeconds 0))
+                    , periodEnd = shiftTimeWZone (HG.TimeOfDay (Hours 16) (Minutes 00) (Seconds 0) (NanoSeconds 0))
                     }
                 , firstExpected
                 ]
               }
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-          tuesday = Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          tuesday = HG.Date { dateDay = 06, dateMonth = March, dateYear = 2018 }
 
-          startDate = DateTime sunday $ TimeOfDay 12 0 0 0
-          endDate = DateTime tuesday $ TimeOfDay 13 0 0 0
+          startDate = HG.DateTime sunday $ HG.TimeOfDay 12 0 0 0
+          endDate = HG.DateTime tuesday $ HG.TimeOfDay 13 0 0 0
 
           start = Start . internTimeFromLocalOffset $ startDate
           end = End . internTimeFromLocalOffset $ endDate
@@ -709,9 +715,9 @@ sunday:
   describe "eventDuration" $ do
     it "calculates the duration of the period" $ do
       let
-        sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-        eventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-        eventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+        sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        eventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+        eventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
         event = GCalEvent (Just "event") Nothing eventStart eventEnd
 
       eventDuration event `shouldBe` (Minutes $ (2 * 60) + 30, Seconds 0)
@@ -719,13 +725,13 @@ sunday:
   describe "totalDuration" $ do
     it "sums durations of a collection of events" $ do
       let
-        sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-        event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-        event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+        sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+        event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
         event1 = GCalEvent (Just "event1") Nothing event1Start event1End
 
-        event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
-        event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+        event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 30 0 0)
+        event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 30 0 0)
         event2 = GCalEvent (Just "event2") Nothing event2Start event2End
 
       totalDuration [event1, event2] `shouldBe` (Minutes $ (4 * 60) + 30, Seconds 0)
@@ -733,18 +739,18 @@ sunday:
   describe "eventBySummDuration" $ do
     it "groups by event summary, and sums hours/minutes" $ do
       let
-        sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-        xEvent1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-        xEvent1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+        xEvent1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+        xEvent1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
         xEvent1 = GCalEvent (Just "x") Nothing xEvent1Start xEvent1End
 
-        yEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
-        yEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 45 0 0)
+        yEventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 30 0 0)
+        yEventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 45 0 0)
         yEvent = GCalEvent (Just "y") Nothing yEventStart yEventEnd
 
-        xEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-        xEvent2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+        xEvent2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+        xEvent2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
         xEvent2 = GCalEvent (Just " X  ") Nothing xEvent2Start xEvent2End
 
         expected = [ ("x", Hours 5, Minutes 0)
@@ -756,29 +762,29 @@ sunday:
   describe "weekOf" $ do
     it "finds the week of the current date" $ do
       let
-        wed = Date { dateDay = 07, dateMonth = December, dateYear = 2022 }
+        wed = HG.Date { dateDay = 07, dateMonth = December, dateYear = 2022 }
 
-        sun = Start $ Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
-        sat = End $ Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
+        sun = Start $ HG.Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+        sat = End $ HG.Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
 
       weekOf wed `shouldBe` (sun, sat)
 
     context "on the first day of the week" $ do
       it "finds the week of the current date" $ do
         let
-          sun = Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+          sun = HG.Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
 
           start = Start $ sun
-          end = End $ Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
+          end = End $ HG.Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
 
         weekOf sun `shouldBe` (start, end)
 
     context "on the first day of the week" $ do
       it "finds the week of the current date" $ do
         let
-          sun = Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
+          sun = HG.Date { dateDay = 10, dateMonth = December, dateYear = 2022 }
 
-          start = Start $ Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
+          start = Start $ HG.Date { dateDay = 04, dateMonth = December, dateYear = 2022 }
           end   = End $ sun
 
         weekOf sun `shouldBe` (start, end)
@@ -789,14 +795,14 @@ sunday:
         let
           name = "Suze Z"
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
           event1 = GCalEvent (Just "suze c") Nothing event1Start event1End
 
-          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
-          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+          event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 30 0 0)
+          event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 30 0 0)
           event2 = GCalEvent (Just "well suZe z has fun!") Nothing event2Start event2End
 
         stafferOnCal name [event1, event2] `shouldBe` True
@@ -806,14 +812,14 @@ sunday:
         let
           name = "Suze Z"
 
-          sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 9 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 9 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
           event1 = GCalEvent (Just "suze c") Nothing event1Start event1End
 
-          event2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 30 0 0)
-          event2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 30 0 0)
+          event2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 30 0 0)
+          event2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 30 0 0)
           event2 = GCalEvent (Just "well suZe k has fun!") Nothing event2Start event2End
 
         stafferOnCal name [event1, event2] `shouldBe` False
@@ -821,32 +827,32 @@ sunday:
   describe "hasOverlap" $ do
     context "when a new event has overlaps with existing events" $ do
       it "is true" $ do
-        let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        let sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-            prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
-            prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+            prevEventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 0 0 0)
+            prevEventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
             prevEvent = GCalEvent (Just "") Nothing prevEventStart prevEventEnd
 
-            prevEvent2Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 14 0 0 0)
-            prevEvent2End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 16 0 0 0)
+            prevEvent2Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 14 0 0 0)
+            prevEvent2End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 16 0 0 0)
             prevEvent2 = GCalEvent (Just "") Nothing prevEvent2Start prevEvent2End
 
-            newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
-            newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+            newEventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 15 30 0 0)
+            newEventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 18 00 0 0)
             newEvent = GCalEvent (Just "") Nothing newEventStart newEventEnd
 
         hasOverlap [prevEvent, prevEvent2] newEvent `shouldBe` True
 
     context "when a new event has no overlaps with existing events" $ do
       it "is false" $ do
-        let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        let sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
 
-            prevEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 10 0 0 0)
-            prevEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 12 0 0 0)
+            prevEventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 10 0 0 0)
+            prevEventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 12 0 0 0)
             prevEvent = GCalEvent (Just "") Nothing prevEventStart prevEventEnd
 
-            newEventStart = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
-            newEventEnd = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+            newEventStart = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 15 30 0 0)
+            newEventEnd = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 18 00 0 0)
             newEvent = GCalEvent (Just "") Nothing newEventStart newEventEnd
 
         hasOverlap [prevEvent] newEvent `shouldBe` False
@@ -855,7 +861,7 @@ sunday:
     context "with active an inactive contacts" $ do
       it "filters out inactive contacts" $ do
         let
-          nowDate = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          nowDate = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
           past = getInternTime utcOffset $ advanceDate (Days (-3)) nowDate
           future = getInternTime utcOffset $ advanceDate (Days 3) nowDate
           now = getInternTime utcOffset $ nowDate
@@ -869,7 +875,7 @@ sunday:
     context "with only inactive contacts" $ do
       it "is empty" $ do
         let
-          nowDate = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          nowDate = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
           future = getInternTime utcOffset $ advanceDate (Days 3) nowDate
           distantFuture = getInternTime utcOffset $ advanceDate (Days 30) nowDate
           now = getInternTime utcOffset $ nowDate
@@ -881,13 +887,13 @@ sunday:
 
   describe "displaying gaps" $ do
     it "shows correctly formatted times" $ do
-      let sun = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-          sunStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime sun $ TimeOfDay 6 0 0 0
-          sunEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime sun $ TimeOfDay 23 15 0 0
+      let sun = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          sunStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ HG.DateTime sun $ HG.TimeOfDay 6 0 0 0
+          sunEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ HG.DateTime sun $ HG.TimeOfDay 23 15 0 0
 
-          mon = Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
-          monStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime mon $ TimeOfDay 12 50 0 0
-          monEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ DateTime mon $ TimeOfDay 18 15 0 0
+          mon = HG.Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
+          monStart = DisplayTZ $ localTime localOffset $ timeGetElapsed $ HG.DateTime mon $ HG.TimeOfDay 12 50 0 0
+          monEnd = DisplayTZ $ localTime localOffset $ timeGetElapsed $ HG.DateTime mon $ HG.TimeOfDay 18 15 0 0
 
           gaps = Gaps [ Period sunStart sunEnd Nothing
                       , Period monStart monEnd Nothing
@@ -898,15 +904,15 @@ sunday:
 
   describe "selecting which staffers to nag" $ do
     it "only selects staffers who don't have a shift yet" $ do
-      let sunday = Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
-          monday = Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
+      let sunday = HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+          monday = HG.Date { dateDay = 05, dateMonth = March, dateYear = 2018 }
 
-          event1Start = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 15 30 0 0)
-          event1End = internTimeFromLocalOffset $ DateTime sunday (TimeOfDay 18 00 0 0)
+          event1Start = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 15 30 0 0)
+          event1End = internTimeFromLocalOffset $ HG.DateTime sunday (HG.TimeOfDay 18 00 0 0)
           event1 = GCalEvent (Just "Jeffers") Nothing event1Start event1End
 
-          event2Start = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 15 30 0 0)
-          event2End = internTimeFromLocalOffset $ DateTime monday (TimeOfDay 18 00 0 0)
+          event2Start = internTimeFromLocalOffset $ HG.DateTime monday (HG.TimeOfDay 15 30 0 0)
+          event2End = internTimeFromLocalOffset $ HG.DateTime monday (HG.TimeOfDay 18 00 0 0)
           event2 = GCalEvent (Just "  beLINda ") Nothing event2Start event2End
 
           onSched = Active $ Contact "Belinda" "156131" Nothing 1 Set.empty
@@ -917,21 +923,21 @@ sunday:
   describe "daysUntil" $ do
     context "3 days to target weekday" $ do
       it "evalutes to 3" $ do
-        let sunday = getInternTime utcOffset $ Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        let sunday = getInternTime utcOffset $ HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
         daysUntil utcOffset sunday Wednesday `shouldBe` Days 3
 
     context "on target weekday" $ do
       it "evalutes to zero" $ do
-        let sunday = getInternTime utcOffset $ Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
+        let sunday = getInternTime utcOffset $ HG.Date { dateDay = 04, dateMonth = March, dateYear = 2018 }
         daysUntil utcOffset sunday Sunday `shouldBe` Days 0
 
 -- helpers
 
-eod :: Date -> DateTime
-eod d = DateTime d $ TimeOfDay 23 59 0 0
+eod :: HG.Date -> HG.DateTime
+eod d = HG.DateTime d $ HG.TimeOfDay 23 59 0 0
 
-intoIntern :: Functor f => Date -> f (ShiftTime TimeOfDay) -> f InternTime
-intoIntern day = fmap $ internTimeFromLocalOffset . DateTime day . stTime
+intoIntern :: Functor f => HG.Date -> f (ShiftTime HG.TimeOfDay) -> f InternTime
+intoIntern day = fmap $ internTimeFromLocalOffset . HG.DateTime day . stTime
 
 shiftTimeWZone :: a -> ShiftTime a
 shiftTimeWZone a = ShiftTime a localOffset

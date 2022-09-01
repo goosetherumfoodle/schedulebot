@@ -24,7 +24,7 @@ source-repository head
 
 library
   exposed-modules:
-      Example
+      Bot.Time, Bot.Twilio, Bot.Cal, Bot.Server, Bot.Alert
   other-modules:
       Paths_scheduler_fp
   hs-source-dirs:
@@ -67,49 +67,10 @@ library
     , mtl
   default-language: Haskell2010
 
-executable alert-annex-emergency
-  main-is: Alert/AnnexEmergency.hs
-  other-modules:
-      Alert.AnnexWeek
-      Alert.Emergency
-      Alert.Nag
-      Alert.Week
-      MainServer
-      Paths_scheduler_fp
-  hs-source-dirs:
-      executable
-  ghc-options: -Wall -main-is Alert.AnnexEmergency -O2 -rtsopts -threaded -with-rtsopts=-N
-  split-sections: true
-  build-depends:
-      base
-    , scheduler-fp
-  default-language: Haskell2010
-
-executable alert-annex-week
-  main-is: Alert/AnnexWeek.hs
-  other-modules:
-      Alert.AnnexEmergency
-      Alert.Emergency
-      Alert.Nag
-      Alert.Week
-      MainServer
-      Paths_scheduler_fp
-  hs-source-dirs:
-      executable
-  ghc-options: -Wall -main-is Alert.AnnexWeek -O2 -rtsopts -threaded -with-rtsopts=-N
-  split-sections: true
-  build-depends:
-      base
-    , scheduler-fp
-  default-language: Haskell2010
-
 executable alert-emergency
   main-is: Alert/Emergency.hs
   other-modules:
-      Alert.AnnexEmergency
-      Alert.AnnexWeek
-      Alert.Nag
-      Alert.Week
+      Alert.Emergency
       MainServer
       Paths_scheduler_fp
   hs-source-dirs:
@@ -124,10 +85,7 @@ executable alert-emergency
 executable alert-nag
   main-is: Alert/Nag.hs
   other-modules:
-      Alert.AnnexEmergency
-      Alert.AnnexWeek
-      Alert.Emergency
-      Alert.Week
+      Alert.Nag
       MainServer
       Paths_scheduler_fp
   hs-source-dirs:
@@ -142,10 +100,7 @@ executable alert-nag
 executable alert-week
   main-is: Alert/Week.hs
   other-modules:
-      Alert.AnnexEmergency
-      Alert.AnnexWeek
-      Alert.Emergency
-      Alert.Nag
+      Alert.Week
       MainServer
       Paths_scheduler_fp
   hs-source-dirs:
@@ -160,8 +115,6 @@ executable alert-week
 executable server
   main-is: MainServer.hs
   other-modules:
-      Alert.AnnexEmergency
-      Alert.AnnexWeek
       Alert.Emergency
       Alert.Nag
       Alert.Week

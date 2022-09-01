@@ -1,6 +1,6 @@
 module MainServer where
 
-import qualified Example as Ex
+import Bot.Server (startServer)
 
 main :: IO ()
-main = Ex.startServer
+main = startServer

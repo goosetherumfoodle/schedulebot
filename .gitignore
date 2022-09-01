@@ -12,3 +12,5 @@
 /.stack-work/
 /config/call_responses.yml
 /notes.org
+**/node_modules/*
+**/target/*
