@@ -1,0 +1,6 @@
+services:
+  db:
+    image: projectm36/project-m36
+    ports:
+      - "6543:6543"
+    command: project-m36-server -n schedule_bot

@@ -47,6 +47,7 @@ library
     , load-env
     , parsec
     , prettyprinter
+    , project-m36
     , raw-strings-qq
     , servant-server
     , servant-xml
@@ -63,7 +64,6 @@ library
     , wreq
     , xmlbf
     , yaml
-
     , mtl
   default-language: Haskell2010
 

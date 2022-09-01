@@ -19,6 +19,12 @@ nix-build
 nix-shell --run "cabal test"
 #+END_SRC
 
+* Database
+  opening a db repl
+#+BEGIN_SRC bash
+  docker run -it projectm36/project-m36 tutd
+#+END_SRC
+
 * Design
 
 This service was designed to be [[https://calmtech.com/][calm technology]]. The community group
